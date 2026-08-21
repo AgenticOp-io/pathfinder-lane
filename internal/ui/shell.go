@@ -890,6 +890,38 @@ func (s *Shell) TabCount() int { return len(s.byID) }
 // the window manager is pointing at, and guessing would close the wrong one.
 func (s *Shell) Current() *Instance { return s.instanceFor(s.tabs.Selected()) }
 
+// SendToActive writes text to the current tab when it is a terminal that
+// implements SendBytes. Non-terminal applets are ignored.
+func (s *Shell) SendToActive(text string) {
+	if s == nil || text == "" {
+		return
+	}
+	cur := s.Current()
+	if cur == nil {
+		return
+	}
+	type sender interface{ SendBytes([]byte) }
+	if x, ok := cur.mount.Applet.(sender); ok {
+		x.SendBytes([]byte(text))
+	}
+}
+
+// SendToAllTerminals writes text to every open terminal tab (button scope=all).
+func (s *Shell) SendToAllTerminals(text string) {
+	if s == nil || text == "" {
+		return
+	}
+	type sender interface{ SendBytes([]byte) }
+	for _, i := range s.instances() {
+		if i == nil || i.mount.Kind != KindTerminal {
+			continue
+		}
+		if x, ok := i.mount.Applet.(sender); ok {
+			x.SendBytes([]byte(text))
+		}
+	}
+}
+
 // CloseCurrent closes the selected tab. No-op when nothing is docked.
 func (s *Shell) CloseCurrent() {
 	if inst := s.Current(); inst != nil {

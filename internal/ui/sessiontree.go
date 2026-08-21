@@ -231,7 +231,7 @@ func (t *SessionTree) setStatus(filter string) {
 	total := len(t.tree.Nodes())
 	switch {
 	case total == 0:
-		t.status.SetText("No sessions yet")
+		t.status.SetText("No sessions yet — File → Import SecureCRT, or run SETUP.bat")
 	case filter == "":
 		t.status.SetText(fmt.Sprintf("%d sessions", total))
 	case t.view.Matched == 0:

@@ -55,14 +55,17 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/scottpeterman/pathfinderssh/internal/buttons"
 	"github.com/scottpeterman/pathfinderssh/internal/capture"
 	"github.com/scottpeterman/pathfinderssh/internal/capturedial"
 	"github.com/scottpeterman/pathfinderssh/internal/capturerun"
 	"github.com/scottpeterman/pathfinderssh/internal/crawldial"
 	"github.com/scottpeterman/pathfinderssh/internal/crawler"
 	"github.com/scottpeterman/pathfinderssh/internal/crawlrun"
+	"github.com/scottpeterman/pathfinderssh/internal/crtimport"
 	helpdoc "github.com/scottpeterman/pathfinderssh/internal/help"
 	"github.com/scottpeterman/pathfinderssh/internal/mapweb"
+	"github.com/scottpeterman/pathfinderssh/internal/recent"
 	"github.com/scottpeterman/pathfinderssh/internal/serialx"
 	"github.com/scottpeterman/pathfinderssh/internal/sessiondial"
 	"github.com/scottpeterman/pathfinderssh/internal/sessions"
@@ -376,6 +379,9 @@ func (h *host) buildSessionTree(path string) {
 	h.tree = ui.NewSessionTree(ui.SessionTreeOptions{
 		Window: h.win,
 		OnActivate: func(folder string, n sessions.Node) {
+			if _, err := recent.Touch(recent.Path(ui.GetAppHome()), folder, n.Label(), n.Host); err != nil {
+				log.Printf("[recent] %v", err)
+			}
 			h.launchTerminalTitled(n.Label(), n)
 		},
 		OnNew: func(folder string, apply func(sessions.Node)) {
@@ -388,6 +394,8 @@ func (h *host) buildSessionTree(path string) {
 	})
 	h.tree.SetTree(tr)
 	h.shell.SetSide(h.tree.Content(), 0.25)
+	h.installButtonBar()
+
 
 	if err != nil {
 		// After the window has content, or the error has nowhere to appear.
@@ -584,6 +592,7 @@ func (h *host) buildMenu() {
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Import session YAML…", h.importSessions),
 		fyne.NewMenuItem("Import topology map…", h.importMap),
+		fyne.NewMenuItem("Import SecureCRT sessions…", h.importSecureCRT),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Export session YAML…", h.exportSessions),
 	)
@@ -674,6 +683,85 @@ func (h *host) importSessions() {
 		tr := h.tree.Tree()
 		h.applyImport(tr, format, tr.ImportFolders(folders))
 	})
+}
+
+// importSecureCRT merges VanDyke Sessions\**\*.ini into the tree.
+// Nested CRT folders become Pathfinder folder names joined with " / ".
+// Passwords are never read from CRT files.
+func (h *host) importSecureCRT() {
+	cfg := crtimport.DefaultConfig()
+	if cfg == "" {
+		dialog.ShowInformation("SecureCRT", "No VanDyke Config folder found under AppData\\Roaming\\VanDyke\\Config.", h.win)
+		return
+	}
+	list, err := crtimport.Import(cfg)
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	folders, supported, skipped := crtimport.Folders(list)
+	if supported == 0 {
+		dialog.ShowInformation("SecureCRT", fmt.Sprintf("No importable sessions in %s (%d skipped).", cfg, skipped), h.win)
+		return
+	}
+	msg := fmt.Sprintf("Import %d sessions from SecureCRT into %d folders?\n\n%s\n\n%d unsupported (RDP/etc.) will be skipped. Passwords are never imported — use the vault.",
+		supported, len(folders), cfg, skipped)
+	dialog.ShowConfirm("Import SecureCRT sessions", msg, func(ok bool) {
+		if !ok {
+			return
+		}
+		tr := h.tree.Tree()
+		sum := tr.ImportFolders(folders)
+		h.applyImport(tr, sessions.FormatNative, sum)
+	}, h.win)
+}
+
+// installButtonBar loads ~/.pathfinderssh/buttons.yaml and puts send actions
+// on the shell toolbar. Scope "all" fans out to every open terminal tab.
+func (h *host) installButtonBar() {
+	path := buttons.Path(ui.GetAppHome())
+	f, err := buttons.Load(path)
+	if err != nil {
+		log.Printf("[buttons] %v", err)
+		return
+	}
+	if len(f.Buttons) == 0 {
+		return
+	}
+	// Persist defaults on first run so the file is discoverable.
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		_ = buttons.Save(path, f)
+	}
+	menuItems := make([]*fyne.MenuItem, 0, len(f.Buttons)+2)
+	for _, b := range f.Buttons {
+		b := b
+		menuItems = append(menuItems, fyne.NewMenuItem(b.Label, func() {
+			h.sendButton(b)
+		}))
+	}
+	menuItems = append(menuItems, fyne.NewMenuItemSeparator())
+	menuItems = append(menuItems, fyne.NewMenuItem("Edit buttons.yaml…", func() {
+		dialog.ShowInformation("Button bar", "Edit "+path+" and restart Pathfinder.\nUse \\n for Return.", h.win)
+	}))
+	btn := widget.NewButtonWithIcon("Buttons", theme.MailSendIcon(), nil)
+	btn.OnTapped = func() {
+		m := fyne.NewMenu("", menuItems...)
+		widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
+	}
+	btn.Importance = widget.LowImportance
+	h.shell.AddToolbar(btn)
+}
+
+func (h *host) sendButton(b buttons.Button) {
+	text := b.Send
+	if text == "" {
+		return
+	}
+	if strings.EqualFold(b.Scope, "all") {
+		h.shell.SendToAllTerminals(text)
+		return
+	}
+	h.shell.SendToActive(text)
 }
 
 // importMap turns a crawl's map.json into sessions.
@@ -910,7 +998,7 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 	inst := h.shell.Open(ui.Mount{
 		Kind:   ui.KindTerminal,
 		Title:  n.Label(),
-		Applet: &termApplet{content: content},
+		Applet: &termApplet{content: content, sess: sess},
 		Focus:  sess,
 		// The terminal resolves its own canvas for focus-on-click and for
 		// its context menu, and the driver's cache cannot tell it that it
@@ -978,11 +1066,20 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 // the teardown that matters is the Mount's OnClose.
 type termApplet struct {
 	content fyne.CanvasObject
+	sess    *ui.Session
 }
 
 func (t *termApplet) Content() fyne.CanvasObject { return t.content }
 func (t *termApplet) Start()                     {}
 func (t *termApplet) Stop()                      {}
+
+// SendBytes implements the button-bar / send-to-all hook.
+func (t *termApplet) SendBytes(b []byte) {
+	if t == nil || t.sess == nil || len(b) == 0 {
+		return
+	}
+	t.sess.SendRaw(b)
+}
 
 // --- crawl -----------------------------------------------------------------
 

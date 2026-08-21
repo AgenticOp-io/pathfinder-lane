@@ -115,11 +115,16 @@ func BuildTreeView(t sessions.Tree, filter string) TreeView {
 		}
 
 		fuid := FolderUID(f.Name)
+		count := len(f.Sessions)
+		label := f.Name
+		if count > 0 {
+			label = f.Name + " (" + strconv.Itoa(count) + ")"
+		}
 		v.Rows[fuid] = TreeRow{
 			UID:      fuid,
 			IsFolder: true,
 			Folder:   f.Name,
-			Label:    f.Name,
+			Label:    label,
 			Detail:   folderDetail(len(kids)),
 		}
 		v.Children[fuid] = kids
