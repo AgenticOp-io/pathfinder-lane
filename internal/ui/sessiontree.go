@@ -47,6 +47,9 @@ package ui
 
 import (
 	"fmt"
+	"strings"
+	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -55,6 +58,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/scottpeterman/pathfinderssh/internal/product"
 	"github.com/scottpeterman/pathfinderssh/internal/sessions"
 )
 
@@ -93,6 +97,19 @@ type SessionTree struct {
 	content fyne.CanvasObject
 
 	selected string
+
+	// Drag-and-drop: source uid while dragging, hover target for drop.
+	draggingUID   string
+	dropTargetUID string
+
+	// filterDebounce coalesces keystrokes so each character does not rebuild
+	// and fully Refresh a nested SecureCRT-sized tree.
+	filterMu       sync.Mutex
+	filterDebounce *time.Timer
+
+	// sessionTotal is cached on each rebuild; avoids flattening Nodes() on
+	// every status update.
+	sessionTotal int
 }
 
 // NewSessionTree builds the panel. Call it after app.New(): it constructs
@@ -147,8 +164,8 @@ func (t *SessionTree) SelectedFolder() string {
 
 func (t *SessionTree) build() {
 	t.search = widget.NewEntry()
-	t.search.SetPlaceHolder("Filter sessions")
-	t.search.OnChanged = func(string) { t.refresh() }
+	t.search.SetPlaceHolder("Filter by folder/session name")
+	t.search.OnChanged = func(string) { t.scheduleFilterRefresh() }
 
 	t.status = widget.NewLabel("")
 	t.status.Wrapping = fyne.TextWrapWord
@@ -186,12 +203,13 @@ func (t *SessionTree) build() {
 		}
 	}
 
-	// No Connect button: double clicking a row opens it. A button that
-	// duplicated the gesture would be one more control competing for a
-	// quarter-width panel, and the gesture is the one nobody has to be told.
-	actions := container.NewGridWithColumns(4,
+	// Connect, new session/folder/customer, edit, delete.
+	// Drag a row onto a folder to move it (sessions or folders).
+	actions := container.NewGridWithColumns(6,
+		widget.NewButtonWithIcon("", theme.LoginIcon(), t.connectSelected),
 		widget.NewButtonWithIcon("", theme.ContentAddIcon(), t.newSession),
 		widget.NewButtonWithIcon("", theme.FolderNewIcon(), t.newFolder),
+		widget.NewButtonWithIcon("", theme.AccountIcon(), t.newCustomer),
 		widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), t.editSelected),
 		widget.NewButtonWithIcon("", theme.DeleteIcon(), t.deleteSelected),
 	)
@@ -201,6 +219,19 @@ func (t *SessionTree) build() {
 	t.refresh()
 }
 
+// scheduleFilterRefresh rebuilds the view after typing pauses. Fyne's Tree
+// Refresh walks every open node; doing that per keystroke freezes large trees.
+func (t *SessionTree) scheduleFilterRefresh() {
+	t.filterMu.Lock()
+	defer t.filterMu.Unlock()
+	if t.filterDebounce != nil {
+		t.filterDebounce.Stop()
+	}
+	t.filterDebounce = time.AfterFunc(120*time.Millisecond, func() {
+		fyne.Do(func() { t.refresh() })
+	})
+}
+
 // refresh rebuilds the view from the tree and the current filter.
 func (t *SessionTree) refresh() {
 	filter := ""
@@ -208,11 +239,16 @@ func (t *SessionTree) refresh() {
 		filter = t.search.Text
 	}
 	t.view = BuildTreeView(t.tree, filter)
+	t.sessionTotal = t.view.TotalSessions
 
 	if t.tw != nil {
-		t.tw.Refresh()
-		for _, uid := range ExpandedFor(t.view, filter) {
-			t.tw.OpenBranch(uid)
+		if strings.TrimSpace(filter) != "" {
+			// OpenAllBranches marks every visible branch open and Refresh()s
+			// once. Looping OpenBranch was N full tree refreshes (pathological
+			// on nested SecureCRT imports).
+			t.tw.OpenAllBranches()
+		} else {
+			t.tw.Refresh()
 		}
 		// A selection that the filter removed must go, or Selected() answers
 		// with a row that is not on screen and Edit acts on the invisible one.
@@ -228,14 +264,13 @@ func (t *SessionTree) setStatus(filter string) {
 	if t.status == nil {
 		return
 	}
-	total := len(t.tree.Nodes())
+	total := t.sessionTotal
 	switch {
-	case total == 0:
-		t.status.SetText("No sessions yet — File → Import SecureCRT, or run SETUP.bat")
+	case total == 0 && filter == "":
+		t.status.SetText("Customers + Unassigned — File → Import SecureCRT fills Unassigned")
 	case filter == "":
 		t.status.SetText(fmt.Sprintf("%d sessions", total))
 	case t.view.Matched == 0:
-		// An empty panel with no explanation reads as a broken widget.
 		t.status.SetText(fmt.Sprintf("No match in %d sessions", total))
 	default:
 		t.status.SetText(fmt.Sprintf("%d of %d", t.view.Matched, total))
@@ -256,10 +291,16 @@ func (t *SessionTree) changed() {
 //
 // The toolkit's own tree node normally does this; the row widget intercepts the
 // click in order to see the second one, so the selection has to be made here
-// instead. Tree.Select is a no-op when the row is already selected.
+// instead. Tree.Select is a no-op when the row is already selected — critical,
+// because Select otherwise full-Refresh()es the tree on every click.
 func (t *SessionTree) rowTapped(uid widget.TreeNodeID) {
+	if uid == "" || uid == t.selected {
+		return
+	}
 	if t.tw != nil {
 		t.tw.Select(uid)
+	} else {
+		t.selected = uid
 	}
 }
 
@@ -286,6 +327,17 @@ func (t *SessionTree) rowActivated(uid widget.TreeNodeID) {
 	}
 }
 
+func (t *SessionTree) connectSelected() {
+	folder, n, ok := t.Selected()
+	if !ok {
+		t.error(fmt.Errorf("select a session to connect"))
+		return
+	}
+	if t.opts.OnActivate != nil {
+		t.opts.OnActivate(folder, n)
+	}
+}
+
 func (t *SessionTree) newSession() {
 	if t.opts.OnNew == nil {
 		return
@@ -306,25 +358,87 @@ func (t *SessionTree) newSession() {
 
 func (t *SessionTree) newFolder() {
 	entry := widget.NewEntry()
-	entry.SetPlaceHolder("Site, role, customer…")
-	items := []*widget.FormItem{widget.NewFormItem("Name", entry)}
+	entry.SetPlaceHolder("Site, role, vendor…")
+	parent := t.SelectedFolder()
+	hint := "Name"
+	if parent != "" {
+		hint = "Name (under " + sessions.PathLeaf(parent) + ")"
+	}
+	items := []*widget.FormItem{widget.NewFormItem(hint, entry)}
 	d := dialog.NewForm("New folder", "Create", "Cancel", items,
 		func(ok bool) {
 			if !ok {
 				return
 			}
-			if err := t.tree.AddFolder(entry.Text); err != nil {
+			name := strings.TrimSpace(entry.Text)
+			path := name
+			if parent != "" && name != "" {
+				path = sessions.JoinPath(parent, name)
+			}
+			if err := t.tree.AddFolder(path); err != nil {
 				t.error(err)
 				return
 			}
 			t.changed()
 		}, t.opts.Window)
 	d.Show()
-	// A one-field dialog is the worst case for having to reach for the
-	// mouse: type the name, then go and click. Submit rather than the
-	// callback, so Return cannot get past a validation the button would
-	// have refused.
 	EnterConfirmsForm(t.opts.Window, items, d.Submit)
+}
+
+// newCustomer creates a customer folder under the built-in Customers root.
+func (t *SessionTree) newCustomer() {
+	entry := widget.NewEntry()
+	entry.SetPlaceHolder("Customer name")
+	items := []*widget.FormItem{widget.NewFormItem("Customer", entry)}
+	d := dialog.NewForm("New customer", "Create", "Cancel", items,
+		func(ok bool) {
+			if !ok {
+				return
+			}
+			if _, err := t.tree.CreateCustomer(product.CustomersRoot, entry.Text); err != nil {
+				t.error(err)
+				return
+			}
+			t.changed()
+			t.status.SetText("Customer created under " + product.CustomersRoot)
+		}, t.opts.Window)
+	d.Show()
+	EnterConfirmsForm(t.opts.Window, items, d.Submit)
+}
+
+// applyDrop moves a dragged session or folder onto a destination folder.
+func (t *SessionTree) applyDrop(srcUID, dstUID string) {
+	src, ok := t.view.Rows[srcUID]
+	if !ok {
+		return
+	}
+	dst, ok := t.view.Rows[dstUID]
+	if !ok || !dst.IsFolder {
+		t.error(fmt.Errorf("drop onto a folder to move"))
+		return
+	}
+	destPath := dst.Folder
+	if src.IsFolder {
+		if src.Folder == destPath {
+			return
+		}
+		if err := t.tree.MoveFolder(src.Folder, destPath); err != nil {
+			t.error(err)
+			return
+		}
+		t.changed()
+		t.status.SetText("Moved folder into " + sessions.PathLeaf(destPath))
+		return
+	}
+	if src.Folder == destPath {
+		return
+	}
+	if err := t.tree.Move(src.Folder, src.Label, destPath); err != nil {
+		t.error(err)
+		return
+	}
+	t.changed()
+	t.status.SetText("Moved " + src.Label + " into " + sessions.PathLeaf(destPath))
 }
 
 func (t *SessionTree) editSelected() {
@@ -368,16 +482,16 @@ func (t *SessionTree) editRow(uid widget.TreeNodeID) {
 	})
 }
 
-func (t *SessionTree) renameFolder(name string) {
+func (t *SessionTree) renameFolder(path string) {
 	entry := widget.NewEntry()
-	entry.SetText(name)
+	entry.SetText(sessions.PathLeaf(path))
 	items := []*widget.FormItem{widget.NewFormItem("Name", entry)}
 	d := dialog.NewForm("Rename folder", "Rename", "Cancel", items,
 		func(ok bool) {
 			if !ok {
 				return
 			}
-			if err := t.tree.RenameFolder(name, entry.Text); err != nil {
+			if err := t.tree.RenameFolder(path, entry.Text); err != nil {
 				t.error(err)
 				return
 			}
@@ -480,7 +594,9 @@ type sessionRow struct {
 var (
 	_ fyne.Tappable       = (*sessionRow)(nil)
 	_ fyne.DoubleTappable = (*sessionRow)(nil)
+	_ fyne.Draggable      = (*sessionRow)(nil)
 	_ desktop.Mouseable   = (*sessionRow)(nil)
+	_ desktop.Hoverable   = (*sessionRow)(nil)
 )
 
 func newSessionRow(t *SessionTree) *sessionRow {
@@ -567,5 +683,49 @@ func (r *sessionRow) Tapped(*fyne.PointEvent) {
 func (r *sessionRow) DoubleTapped(*fyne.PointEvent) {
 	if r.tree != nil && r.uid != "" {
 		r.tree.rowActivated(r.uid)
+	}
+}
+
+// Dragged starts a move; drop onto another folder row to relocate.
+func (r *sessionRow) Dragged(*fyne.DragEvent) {
+	if r.tree == nil || r.uid == "" {
+		return
+	}
+	if r.tree.draggingUID == "" {
+		r.tree.draggingUID = r.uid
+		r.tree.status.SetText("Drop onto a folder to move…")
+	}
+}
+
+func (r *sessionRow) DragEnd() {
+	if r.tree == nil {
+		return
+	}
+	src, dst := r.tree.draggingUID, r.tree.dropTargetUID
+	r.tree.draggingUID = ""
+	r.tree.dropTargetUID = ""
+	if src != "" && dst != "" && src != dst {
+		r.tree.applyDrop(src, dst)
+		return
+	}
+	if src != "" {
+		r.tree.status.SetText("")
+	}
+}
+
+func (r *sessionRow) MouseIn(*desktop.MouseEvent) {
+	if r.tree == nil || r.tree.draggingUID == "" || r.uid == "" {
+		return
+	}
+	if row, ok := r.tree.view.Rows[r.uid]; ok && row.IsFolder {
+		r.tree.dropTargetUID = r.uid
+	}
+}
+
+func (r *sessionRow) MouseMoved(*desktop.MouseEvent) {}
+
+func (r *sessionRow) MouseOut() {
+	if r.tree != nil && r.tree.dropTargetUID == r.uid {
+		r.tree.dropTargetUID = ""
 	}
 }

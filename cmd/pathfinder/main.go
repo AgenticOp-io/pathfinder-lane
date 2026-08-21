@@ -40,7 +40,9 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,6 +57,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/scottpeterman/pathfinderssh/internal/appinstall"
 	"github.com/scottpeterman/pathfinderssh/internal/buttons"
 	"github.com/scottpeterman/pathfinderssh/internal/capture"
 	"github.com/scottpeterman/pathfinderssh/internal/capturedial"
@@ -65,6 +68,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/crtimport"
 	helpdoc "github.com/scottpeterman/pathfinderssh/internal/help"
 	"github.com/scottpeterman/pathfinderssh/internal/mapweb"
+	"github.com/scottpeterman/pathfinderssh/internal/product"
 	"github.com/scottpeterman/pathfinderssh/internal/recent"
 	"github.com/scottpeterman/pathfinderssh/internal/serialx"
 	"github.com/scottpeterman/pathfinderssh/internal/sessiondial"
@@ -85,10 +89,42 @@ func main() {
 		appTheme     = flag.String("app", "dark", "application chrome: dark|light")
 		domain       = flag.String("domain", "", "default domain suffix for crawl and capture")
 		verbose      = flag.Bool("v", false, "log applet progress to stderr")
+		doInstall   = flag.Bool("install", false, "copy into LocalAppData\\PathfinderSSH-MSP, create shortcuts, exit")
+		doUninstall = flag.Bool("uninstall", false, "remove LocalAppData\\PathfinderSSH-MSP install and shortcuts, exit")
+		noInstall   = flag.Bool("no-install", false, "run from this folder without copying to AppData")
 	)
 	flag.Parse()
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+
+	if *doUninstall {
+		if err := appinstall.Uninstall(); err != nil {
+			fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Removed", appinstall.Root())
+		return
+	}
+
+	if err := maybeSelfInstall(*doInstall, *noInstall); err != nil {
+		log.Printf("install: %v", err)
+		if *doInstall {
+			os.Exit(1)
+		}
+	}
+	if *doInstall {
+		fmt.Println("Installed to", appinstall.ExePath())
+		return
+	}
+
+	// One UI process only. A second Start() (or double-click while already
+	// open) previously left two windows racing writes to settings.json.
+	if ok, release := appinstall.TrySingleton(); !ok {
+		fmt.Fprintln(os.Stderr, "PathfinderSSH MSP is already running.")
+		os.Exit(0)
+	} else {
+		defer release()
+	}
 
 	// Settings come off disk before anything is built: the chrome variant
 	// is read by app.New's theme and by every widget after it, so a
@@ -124,7 +160,7 @@ func main() {
 	// Button.CreateRenderer and the panic names a layout function.
 	a := app.New()
 	ui.ApplyAppTheme(a, base.AppVariant())
-	w := a.NewWindow("PathfinderSSH")
+	w := a.NewWindow("PathfinderSSH MSP")
 	w.Resize(fyne.NewSize(1280, 820))
 
 	h := &host{
@@ -195,7 +231,7 @@ func main() {
 			return
 		}
 		h.askingQuit = true
-		d := dialog.NewConfirm("Quit PathfinderSSH?", msg, func(ok bool) {
+		d := dialog.NewConfirm("Quit PathfinderSSH MSP?", msg, func(ok bool) {
 			h.askingQuit = false
 			if ok {
 				h.shutdown()
@@ -219,6 +255,7 @@ func main() {
 	// to be a window for it to appear in. It is silent on every machine
 	// that already has a vault.
 	h.offerVaultCreate()
+	h.offerFirstRunSetup()
 
 	// Immediately before ShowAndRun, like an applet's Start: the watchdog
 	// hands work to fyne.Do and needs a running driver.
@@ -323,16 +360,21 @@ func (h *host) logfIf(runVerbose bool) func(string, ...any) {
 
 // launchTerminal opens the session dialog and connects what comes out of it.
 func (h *host) launchTerminal(start sessions.Node) {
-	h.launchTerminalTitled("New session", start)
+	h.launchTerminalTitled("New session", "", start)
 }
 
 // launchTerminalTitled is the same dialog under a caller-chosen heading. A
 // node picked out of the inventory is not a new session, and a dialog that
 // says it is reads like the click did something other than it did.
-func (h *host) launchTerminalTitled(title string, start sessions.Node) {
+//
+// folder is the inventory path when the node came from the tree (so Save can
+// write it back). Empty means ad-hoc / Quick Connect — Connect only.
+func (h *host) launchTerminalTitled(title, folder string, start sessions.Node) {
 	var d dialog.Dialog
+	var form *ui.SessionForm
+	oldLabel := start.Normalize().Label()
 
-	form := ui.NewSessionForm(ui.SessionFormOptions{
+	opts := ui.SessionFormOptions{
 		Node:              start,
 		Credentials:       h.creds,
 		DefaultCredential: h.defaultCred,
@@ -342,9 +384,28 @@ func (h *host) launchTerminalTitled(title string, start sessions.Node) {
 		OnConnect: func(n sessions.Node) {
 			h.node = n
 			d.Hide()
-			h.connect(n)
+			h.connectSavingPassword(folder, oldLabel, n, func(saved sessions.Node) {
+				if folder != "" {
+					h.applyInventoryNode(folder, oldLabel, saved)
+				}
+			})
 		},
-	})
+	}
+	if folder != "" {
+		opts.ShowSave = true
+		opts.OnSave = func(n sessions.Node) {
+			// Save must NOT close the dialog and must NOT open a terminal.
+			// Closing here left people with no session tab and looking like
+			// "the terminal does not work". Persist, stay open, Connect opens.
+			h.applyInventoryNode(folder, oldLabel, n)
+			oldLabel = n.Normalize().Label()
+			if form != nil {
+				form.SetStatus("Saved. Click Connect to open the terminal.")
+			}
+		}
+	}
+
+	form = ui.NewSessionForm(opts)
 
 	d = dialog.NewCustom(title, "Cancel", form.Content(), h.win)
 	d.Resize(fyne.NewSize(760, 660))
@@ -353,6 +414,24 @@ func (h *host) launchTerminalTitled(title string, start sessions.Node) {
 	// -- so Return goes to the form's own action rather than to the
 	// dialog's.
 	ui.EnterConfirms(h.win, form.Content(), form.Connect)
+}
+
+// applyInventoryNode writes an edited node back into the session tree.
+func (h *host) applyInventoryNode(folder, oldLabel string, n sessions.Node) {
+	if h.tree == nil || folder == "" {
+		return
+	}
+	tr := h.tree.Tree()
+	if err := tr.Replace(folder, oldLabel, n); err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	h.tree.SetTree(tr)
+	// Synchronous: credential: links from password-save must hit disk before
+	// the next Connect, and an async save raced a wipe of that field.
+	if err := sessions.SaveFile(h.sessionsPath, tr); err != nil {
+		dialog.ShowError(fmt.Errorf("could not save %s: %w", h.sessionsPath, err), h.win)
+	}
 }
 
 // --- session tree ----------------------------------------------------------
@@ -375,20 +454,40 @@ func (h *host) buildSessionTree(path string) {
 	if err != nil {
 		log.Printf("[sessions] %s: %v", h.sessionsPath, err)
 	}
+	if changed, mErr := (&tr).EnsureMSPLayout(); mErr != nil {
+		log.Printf("[sessions] MSP layout: %v", mErr)
+	} else if changed {
+		if sErr := sessions.SaveFile(h.sessionsPath, tr); sErr != nil {
+			log.Printf("[sessions] save after MSP migrate: %v", sErr)
+		} else {
+			log.Printf("[sessions] migrated inventory to Customers / Unassigned")
+		}
+	}
 
 	h.tree = ui.NewSessionTree(ui.SessionTreeOptions{
 		Window: h.win,
 		OnActivate: func(folder string, n sessions.Node) {
-			if _, err := recent.Touch(recent.Path(ui.GetAppHome()), folder, n.Label(), n.Host); err != nil {
-				log.Printf("[recent] %v", err)
+			go func() {
+				if _, err := recent.Touch(recent.Path(ui.GetAppHome()), folder, n.Label(), n.Host); err != nil {
+					log.Printf("[recent] %v", err)
+				}
+			}()
+			// Double-click with a saved password (vault credential) skips the
+			// form and dials immediately — SecureCRT-style auto-login.
+			if h.canAutoLogin(n) {
+				label := n.Normalize().Label()
+				h.connect(folder, label, n, func(saved sessions.Node) {
+					h.applyInventoryNode(folder, label, saved)
+				})
+				return
 			}
-			h.launchTerminalTitled(n.Label(), n)
+			h.launchTerminalTitled(n.Label(), folder, n)
 		},
 		OnNew: func(folder string, apply func(sessions.Node)) {
-			h.editSession("New session in "+folder, sessions.Defaults(), apply)
+			h.editSession("New session in "+folder, folder, sessions.Defaults(), apply)
 		},
 		OnEdit: func(folder string, n sessions.Node, apply func(sessions.Node)) {
-			h.editSession("Edit "+n.Label(), n, apply)
+			h.editSession("Edit "+n.Label(), folder, n, apply)
 		},
 		OnChanged: h.saveTree,
 	})
@@ -406,11 +505,11 @@ func (h *host) buildSessionTree(path string) {
 }
 
 // editSession is the inventory's session dialog: Save writes it back to the
-// tree, Connect saves AND dials. Saving on connect is deliberate — editing a
-// node in order to reach a box, connecting, and finding the edit gone is a
-// small betrayal that happens every time.
-func (h *host) editSession(title string, start sessions.Node, apply func(sessions.Node)) {
+// tree; Connect dials and writes the tree after a successful dial (so a
+// password-save credential: link is not wiped by a pre-connect write).
+func (h *host) editSession(title, folder string, start sessions.Node, apply func(sessions.Node)) {
 	var d dialog.Dialog
+	oldLabel := start.Normalize().Label()
 
 	form := ui.NewSessionForm(ui.SessionFormOptions{
 		Node:              start,
@@ -426,8 +525,7 @@ func (h *host) editSession(title string, start sessions.Node, apply func(session
 		},
 		OnConnect: func(n sessions.Node) {
 			d.Hide()
-			apply(n)
-			h.connect(n)
+			h.connectSavingPassword(folder, oldLabel, n, apply)
 		},
 	})
 
@@ -445,24 +543,44 @@ func (h *host) editSession(title string, start sessions.Node, apply func(session
 // no single right answer. Writing to a guess would edit the wrong device's
 // session file, which is worse than not offering to write at all.
 func (h *host) folderFor(n sessions.Node) (string, bool) {
+	if h.tree == nil {
+		return "", false
+	}
 	label := n.Normalize().Label()
 	if label == "" {
 		return "", false
 	}
 	target := n.Target()
 	found := ""
-	for _, f := range h.tree.Tree().Folders {
-		for _, s := range f.Sessions {
-			if s.Label() != label || s.Target() != target {
-				continue
+	ambiguous := false
+	var walk func(prefix string, folders []sessions.Folder)
+	walk = func(prefix string, folders []sessions.Folder) {
+		for _, f := range folders {
+			path := f.Name
+			if prefix != "" {
+				path = sessions.JoinPath(prefix, f.Name)
 			}
-			if found != "" {
-				return "", false
+			for _, s := range f.Sessions {
+				if s.Label() != label || s.Target() != target {
+					continue
+				}
+				if found != "" {
+					ambiguous = true
+					return
+				}
+				found = path
 			}
-			found = f.Name
+			walk(path, f.Folders)
+			if ambiguous {
+				return
+			}
 		}
 	}
-	return found, found != ""
+	walk("", h.tree.Tree().Folders)
+	if ambiguous || found == "" {
+		return "", false
+	}
+	return found, true
 }
 
 // rememberPastePacing persists a pacing pair chosen in the paste confirmation.
@@ -483,13 +601,13 @@ func (h *host) rememberPastePacing(folder string, n sessions.Node, delayMs, baud
 	}
 
 	tr := h.tree.Tree()
-	i := tr.FolderIndex(folder)
-	if i < 0 {
-		dialog.ShowError(fmt.Errorf("no folder called %q", folder), h.win)
+	f, err := tr.FolderAt(folder)
+	if err != nil {
+		dialog.ShowError(err, h.win)
 		return
 	}
 	label := n.Normalize().Label()
-	j := tr.Folders[i].SessionIndex(label)
+	j := f.SessionIndex(label)
 	if j < 0 {
 		dialog.ShowError(fmt.Errorf("no session called %q in %q", label, folder), h.win)
 		return
@@ -499,7 +617,7 @@ func (h *host) rememberPastePacing(folder string, n sessions.Node, delayMs, baud
 	// tab was dialled from. That copy is a snapshot taken at connect time,
 	// and writing it back would revert anything edited in the session form
 	// since -- an unrelated change lost as a side effect of a paste.
-	upd := tr.Folders[i].Sessions[j]
+	upd := f.Sessions[j]
 	upd.PasteLineDelayMs = delayMs
 	upd.ConsoleBaud = baud
 	if err := tr.Replace(folder, label, upd); err != nil {
@@ -511,13 +629,17 @@ func (h *host) rememberPastePacing(folder string, n sessions.Node, delayMs, baud
 	log.Printf("[paste] remembered pacing for %s: delay=%d baud=%d", label, delayMs, baud)
 }
 
-// saveTree writes the inventory. A failed save is raised, never swallowed: the
-// widget has already redrawn as though it worked, so silence here means the
-// person believes an edit is saved when it is not.
+// saveTree writes the inventory off the UI thread. A large nested SecureCRT
+// tree marshaled synchronously froze clicks for hundreds of milliseconds.
 func (h *host) saveTree(tr sessions.Tree) {
-	if err := sessions.SaveFile(h.sessionsPath, tr); err != nil {
-		dialog.ShowError(fmt.Errorf("could not save %s: %w", h.sessionsPath, err), h.win)
-	}
+	path := h.sessionsPath
+	go func(tr sessions.Tree) {
+		if err := sessions.SaveFile(path, tr); err != nil {
+			fyne.Do(func() {
+				dialog.ShowError(fmt.Errorf("could not save %s: %w", path, err), h.win)
+			})
+		}
+	}(tr)
 }
 
 // --- the File menu ---------------------------------------------------------
@@ -587,7 +709,7 @@ func (h *host) confirmClose(title string, n int, do func()) {
 }
 
 func (h *host) buildMenu() {
-	file := fyne.NewMenu("File",
+	fileItems := []*fyne.MenuItem{
 		fyne.NewMenuItem("Settings…", h.showSettings),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Import session YAML…", h.importSessions),
@@ -595,7 +717,15 @@ func (h *host) buildMenu() {
 		fyne.NewMenuItem("Import SecureCRT sessions…", h.importSecureCRT),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Export session YAML…", h.exportSessions),
-	)
+	}
+	if runtime.GOOS == "windows" {
+		fileItems = append(fileItems,
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Install / update AppData copy…", h.installDesktopShortcuts),
+			fyne.NewMenuItem("Uninstall AppData copy…", h.uninstallDesktop),
+		)
+	}
+	file := fyne.NewMenu("File", fileItems...)
 
 	// A menu as well as the toolbar button. The toolbar answers "is the
 	// vault open"; managing what is IN it is a different question, and
@@ -686,34 +816,52 @@ func (h *host) importSessions() {
 }
 
 // importSecureCRT merges VanDyke Sessions\**\*.ini into the tree.
-// Nested CRT folders become Pathfinder folder names joined with " / ".
-// Passwords are never read from CRT files.
+// Nested CRT folders become nested Pathfinder folders. Passwords are never
+// read from CRT files. Parse/merge run off the UI thread — sync walk of ~800
+// .ini files froze the window before the confirm dialog even appeared.
 func (h *host) importSecureCRT() {
 	cfg := crtimport.DefaultConfig()
 	if cfg == "" {
 		dialog.ShowInformation("SecureCRT", "No VanDyke Config folder found under AppData\\Roaming\\VanDyke\\Config.", h.win)
 		return
 	}
-	list, err := crtimport.Import(cfg)
-	if err != nil {
-		dialog.ShowError(err, h.win)
-		return
-	}
-	folders, supported, skipped := crtimport.Folders(list)
-	if supported == 0 {
-		dialog.ShowInformation("SecureCRT", fmt.Sprintf("No importable sessions in %s (%d skipped).", cfg, skipped), h.win)
-		return
-	}
-	msg := fmt.Sprintf("Import %d sessions from SecureCRT into %d folders?\n\n%s\n\n%d unsupported (RDP/etc.) will be skipped. Passwords are never imported — use the vault.",
-		supported, len(folders), cfg, skipped)
-	dialog.ShowConfirm("Import SecureCRT sessions", msg, func(ok bool) {
-		if !ok {
+	prog := dialog.NewProgressInfinite("SecureCRT", "Reading session files…", h.win)
+	prog.Show()
+	go func() {
+		list, err := crtimport.Import(cfg)
+		if err != nil {
+			fyne.Do(func() {
+				prog.Hide()
+				dialog.ShowError(err, h.win)
+			})
 			return
 		}
-		tr := h.tree.Tree()
-		sum := tr.ImportFolders(folders)
-		h.applyImport(tr, sessions.FormatNative, sum)
-	}, h.win)
+		folders, supported, skipped := crtimport.Folders(list)
+		fyne.Do(func() {
+			prog.Hide()
+			if supported == 0 {
+				dialog.ShowInformation("SecureCRT", fmt.Sprintf("No importable sessions in %s (%d skipped).", cfg, skipped), h.win)
+				return
+			}
+			msg := fmt.Sprintf("Import %d sessions from SecureCRT?\n\n%s\n\nCustomer folders under 3_Customers become Customers/<name>. Other CRT sessions land in Unassigned as a flat list.\n\n%d unsupported (RDP/etc.) will be skipped. Passwords are never imported — use the vault.",
+				supported, cfg, skipped)
+			dialog.ShowConfirm("Import SecureCRT sessions", msg, func(ok bool) {
+				if !ok {
+					return
+				}
+				prog2 := dialog.NewProgressInfinite("SecureCRT", "Merging into session tree…", h.win)
+				prog2.Show()
+				go func() {
+					tr := h.tree.Tree()
+					sum := tr.ImportFolders(folders)
+					fyne.Do(func() {
+						prog2.Hide()
+						h.applyImport(tr, sessions.FormatNative, sum)
+					})
+				}()
+			}, h.win)
+		})
+	}()
 }
 
 // installButtonBar loads ~/.pathfinderssh/buttons.yaml and puts send actions
@@ -851,9 +999,13 @@ func (h *host) askMapImport(defaultFolder string, data []byte) {
 // dialog saying 13 sessions were added, over a file that was never written, is
 // the failure worth ruling out.
 func (h *host) applyImport(tr sessions.Tree, format sessions.Format, sum sessions.ImportSummary) {
+	if _, err := (&tr).EnsureMSPLayout(); err != nil {
+		dialog.ShowError(fmt.Errorf("organise import into Customers/Unassigned: %w", err), h.win)
+		return
+	}
 	h.tree.SetTree(tr)
 	h.saveTree(tr)
-	dialog.ShowInformation("Imported "+format.String(), sum.Describe(), h.win)
+	dialog.ShowInformation("Imported "+format.String(), sum.Describe()+"\n\nOrganised into Customers and Unassigned.", h.win)
 }
 
 // exportSessions writes the whole tree to a file of the person's choosing.
@@ -902,7 +1054,7 @@ func (h *host) exportSessions() {
 	d.Show()
 }
 
-func (h *host) connect(n sessions.Node) {
+func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(sessions.Node)) {
 	// The ctx is created HERE, not inside the dial goroutine, because the
 	// Cancel button has to be able to reach it. The 90s ceiling stays as the
 	// unattended bound; Cancel is the attended one.
@@ -929,14 +1081,20 @@ func (h *host) connect(n sessions.Node) {
 	})
 	progress.Show()
 
+	// Pointer so AuthPrompt can attach a vault credential name onto the node
+	// used for the eventual inventory write.
+	node := n
+
 	opts := sessiondial.Options{
 		Credentials:   h.lookup,
 		HostKeyPrompt: h.promptHostKey,
 		OnNewHostKey: func(host, keyType, fingerprint string) {
 			log.Printf("[hostkey] trusted on first contact: %s %s %s", host, keyType, fingerprint)
 		},
-		AuthPrompt: h.promptSecret,
-		Log:        log.Printf,
+		AuthPrompt: func(prompt string, echo bool) (string, error) {
+			return h.promptSecret(folder, oldLabel, &node, prompt, echo)
+		},
+		Log: log.Printf,
 	}
 
 	// Dial off the UI goroutine. A device slow to answer, or a host-key
@@ -945,7 +1103,7 @@ func (h *host) connect(n sessions.Node) {
 	go func() {
 		defer cancel()
 
-		tp, err := sessiondial.Connect(ctx, n, opts)
+		tp, err := sessiondial.Connect(ctx, node, opts)
 		fyne.Do(func() {
 			if !settled.CompareAndSwap(false, true) {
 				// The operator cancelled and has moved on. Connect closes
@@ -958,12 +1116,72 @@ func (h *host) connect(n sessions.Node) {
 			progress.Hide()
 			if err != nil {
 				log.Printf("[dial] %v", err)
-				dialog.ShowError(err, h.win)
+				// After a failed handshake (auth, host key, unreachable), put
+				// the session form back up once the error is acknowledged so
+				// the operator can fix the password or settings.
+				title := node.Label()
+				if title == "" {
+					title = "Session"
+				}
+				ed := dialog.NewError(err, h.win)
+				ed.SetOnClosed(func() {
+					h.launchTerminalTitled(title, folder, node)
+				})
+				ed.Show()
 				return
 			}
-			h.mountTerminal(n, tp)
+			// Persist after dial so password-link Credential is kept, and so
+			// New session (Add) still works via the tree's apply callback.
+			if persist != nil {
+				persist(node)
+			}
+			h.mountTerminal(node, tp)
 		})
 	}()
+}
+
+// connectSavingPassword stores a form-typed password in the vault (unlocking
+// first if needed) before dialling, so AuthPrompt is not the only save path.
+// The session form password field is yaml:"-" and was previously discarded.
+func (h *host) connectSavingPassword(folder, oldLabel string, n sessions.Node, persist func(sessions.Node)) {
+	pw := strings.TrimSpace(n.Password)
+	if pw == "" {
+		h.connect(folder, oldLabel, n, persist)
+		return
+	}
+	go func() {
+		node := n
+		if h.ensureVaultUnlockedBlocking() {
+			h.persistDialPassword(folder, oldLabel, &node, pw)
+			// Keep password on the in-memory node for this dial; vault link
+			// covers the next one.
+		} else {
+			log.Printf("[vault] could not unlock — connecting with typed password only (not saved)")
+		}
+		fyne.Do(func() {
+			h.connect(folder, oldLabel, node, persist)
+		})
+	}()
+}
+
+// canAutoLogin reports whether double-click should dial without opening the form.
+// Requires a vault credential that resolves to a password (or key material).
+func (h *host) canAutoLogin(n sessions.Node) bool {
+	if n.Transport == sessions.TransportTelnet || n.Transport == sessions.TransportSerial {
+		return true
+	}
+	if strings.TrimSpace(n.Password) != "" {
+		return true
+	}
+	ref := strings.TrimSpace(n.Credential)
+	if ref == "" || h.lookup == nil {
+		return false
+	}
+	c, err := h.lookup(ref)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(c.Password) != "" || strings.TrimSpace(c.KeyPath) != ""
 }
 
 // mountTerminal builds the session and hands it to the shell. UI goroutine.
@@ -981,9 +1199,11 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 	// Before Attach: anti-idle is read when the transport is attached, so
 	// setting it afterwards silently does nothing until a reconnect.
 	ui.ApplySession(sess, n)
-	// Pin the palette rather than letting it fall through to the global,
-	// which the next session mounted would move.
-	sess.SetTerminalTheme(cfg.TerminalThemeName())
+	// Do NOT call SetTerminalTheme(cfg.TerminalThemeName()) here. That pinned
+	// every session to a copy of the global palette, so Settings → Terminal
+	// theme never updated open (or even "inheriting") tabs. ApplySession
+	// already sets a session-specific theme when the node names one; otherwise
+	// the widget inherits CurrentSettings().
 	content := ui.ThemedAt(sess, cfg)
 
 	ui.SetSettings(h.base)
@@ -1058,7 +1278,10 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 	})
 	sess.SetErrorHandler(func(err error) { log.Printf("[error] %s: %v", n.Label(), err) })
 
-	h.win.Canvas().Focus(sess)
+	// Do not Canvas.Focus / GrabFocus here. The Connecting dialog's Hide may
+	// still leave an overlay on this frame; focusing under an overlay lands
+	// keys in the wrong focus manager and the terminal looks dead. Shell
+	// settle() waits for overlays to clear, then focuses + OnPlaced (ResyncSize).
 }
 
 // termApplet is the whole adapter. A terminal has no redraw loop to gate -- it
@@ -1085,17 +1308,100 @@ func (t *termApplet) SendBytes(b []byte) {
 
 func (h *host) launchCrawl() {
 	h.lastCrawl.Params.VaultPath = h.runVaultPath()
-	ui.ShowCrawlDialog(h.win, h.lastCrawl, func(l ui.CrawlLaunch) {
-		// Only when the dialog did NOT ask for manual credentials. It
-		// clears VaultPath deliberately in that case, and restoring it
-		// here is exactly the bug the selector exists to close: the
-		// typed credential would be collected and then never offered.
+	home := ""
+	if h.vaultPath != "" {
+		home = filepath.Dir(h.vaultPath)
+	} else {
+		home = ui.GetAppHome()
+	}
+	root := product.CustomersRoot
+	if h.tree != nil {
+		tr := h.tree.Tree()
+		if _, err := (&tr).EnsureMSPLayout(); err != nil {
+			log.Printf("[sessions] MSP layout: %v", err)
+		}
+		h.tree.SetTree(tr)
+	}
+	ui.ShowCrawlWizard(h.win, ui.CrawlWizardOptions{
+		Prev:          h.lastCrawl,
+		Sessions:      h.crawlSeedOptions(),
+		Customers:     h.customerNames(),
+		CustomersRoot: root,
+		HomeDir:       home,
+		CreateCustomer: func(name string) (string, error) {
+			if h.tree == nil {
+				return "", fmt.Errorf("no session tree loaded")
+			}
+			tr := h.tree.Tree()
+			path, err := tr.CreateCustomer(root, name)
+			if err != nil {
+				return "", err
+			}
+			h.tree.SetTree(tr)
+			h.saveTree(tr)
+			return path, nil
+		},
+	}, func(l ui.CrawlLaunch) {
 		if !l.ManualCreds {
 			l.Params.VaultPath = h.runVaultPath()
 		}
 		h.lastCrawl = l
 		h.startCrawl(l)
 	})
+}
+
+func (h *host) customerNames() []string {
+	if h.tree == nil {
+		return nil
+	}
+	tr := h.tree.Tree()
+	return tr.ListCustomers(product.CustomersRoot)
+}
+
+// crawlSeedOptions lists inventory hosts tagged with their customer (folder
+// directly under 3_Customers).
+func (h *host) crawlSeedOptions() []ui.CrawlSeedOption {
+	if h.tree == nil {
+		return nil
+	}
+	root := product.CustomersRoot
+	seen := map[string]bool{}
+	var out []ui.CrawlSeedOption
+	h.tree.Tree().WalkSessions(func(folder string, n sessions.Node) {
+		n = n.Normalize()
+		if n.Transport == sessions.TransportSerial {
+			return
+		}
+		host := strings.TrimSpace(n.Host)
+		if host == "" || seen[strings.ToLower(host)] {
+			return
+		}
+		seen[strings.ToLower(host)] = true
+		customer := customerOfPath(root, folder)
+		label := n.Label()
+		if label == "" || strings.EqualFold(label, host) {
+			label = host
+		} else {
+			label = label + " (" + host + ")"
+		}
+		out = append(out, ui.CrawlSeedOption{Label: label, Host: host, Customer: customer})
+	})
+	return out
+}
+
+// customerOfPath returns the customer leaf under root for a folder path.
+func customerOfPath(root, folder string) string {
+	parts := sessions.SplitPath(folder)
+	rootParts := sessions.SplitPath(root)
+	if len(parts) <= len(rootParts) {
+		return ""
+	}
+	for i := range rootParts {
+		if !strings.EqualFold(parts[i], rootParts[i]) {
+			return ""
+		}
+	}
+	return parts[len(rootParts)]
 }
 
 func (h *host) startCrawl(l ui.CrawlLaunch) {
@@ -1150,7 +1456,7 @@ func (h *host) startCrawl(l ui.CrawlLaunch) {
 		// counter on somebody's TACACS server.
 		OnClose: cancel,
 	})
-	inst.SetStatus(fmt.Sprintf("%d seed(s) · depth %d", len(l.Params.Seeds), l.Params.Depth))
+	inst.SetStatus(fmt.Sprintf("%d starting device(s) · depth %d", len(l.Params.Seeds), l.Params.Depth))
 
 	if l.LastRun != "" {
 		if prev, err := crawlrun.LoadSnapshot(l.LastRun); err == nil {
@@ -1792,6 +2098,12 @@ var version = "0.93"
 // dialog that appears to work and silently does not persist is worse than one
 // that says the disk is full.
 func (h *host) showSettings() {
+	// Prefer disk so a prior save is not overwritten by a stale in-memory base
+	// (e.g. after another code path wrote settings.json).
+	if loaded, err := ui.LoadSettings(h.settingsPath); err == nil {
+		h.base = loaded
+		ui.SetSettings(loaded)
+	}
 	ui.ShowSettings(h.win, ui.SettingsFormOptions{
 		Settings: h.base,
 		Paths:    h.hostPaths(),
@@ -1801,12 +2113,35 @@ func (h *host) showSettings() {
 			}
 			h.base = s
 			ui.SetSettings(s)
-
+			// Persist synchronously. Async save looked responsive but lost
+			// theme changes when the app locked up or quit before the write.
 			if err := ui.SaveSettings(h.settingsPath, s); err != nil {
 				dialog.ShowError(err, h.win)
+				return
 			}
+			// Re-read so h.base matches what will load on next start.
+			if loaded, err := ui.LoadSettings(h.settingsPath); err == nil {
+				h.base = loaded
+				ui.SetSettings(loaded)
+			}
+			h.refreshOpenTerminalThemes()
 		},
 	})
+}
+
+// refreshOpenTerminalThemes rebuilds palettes on open terminals after Settings
+// save. Sessions with an empty override inherit the new global theme; sessions
+// with their own node theme keep that override but still refresh the cache.
+func (h *host) refreshOpenTerminalThemes() {
+	for _, inst := range h.shell.Instances() {
+		ta, ok := inst.Applet().(*termApplet)
+		if !ok || ta.sess == nil {
+			continue
+		}
+		// Re-apply override (or "" to inherit CurrentSettings) so the palette
+		// cache and TextGrid rebuild against the theme just saved.
+		ta.sess.SetTerminalTheme(ta.sess.TerminalThemeName())
+	}
 }
 
 // hostPaths are the files this run resolved, for the settings dialog's
@@ -1861,6 +2196,105 @@ func (h *host) manageVault() {
 	// toolbar together, so a credential added here is offered by the next
 	// dialog that opens without anything else being told.
 	ui.ShowVaultManager(h.win, h.vault, h.refreshVault)
+}
+
+// maybeSelfInstall copies pathfinder into LocalAppData and relaunches from
+// there. Any Windows launch outside the install dir installs itself — no
+// START.bat or PowerShell launcher is required.
+//
+// Never relaunches when this process is already the AppData binary (path
+// compare is prefix-safe). A false "not installed" check used to Start() a
+// second copy of the same exe → two windows and racing settings.json writes.
+func maybeSelfInstall(force, skip bool) error {
+	if runtime.GOOS != "windows" || skip {
+		return nil
+	}
+	exe, _ := os.Executable()
+	destWant := appinstall.ExePath()
+	if appinstall.SameFile(exe, destWant) && !force {
+		return nil
+	}
+	if appinstall.RunningInstalled() && !force {
+		return nil
+	}
+	dest, _, err := appinstall.Ensure()
+	if err != nil {
+		return err
+	}
+	if err := appinstall.CreateShortcuts(dest); err != nil {
+		log.Printf("shortcuts: %v", err)
+	}
+	if force {
+		return nil
+	}
+	if appinstall.SameFile(exe, dest) || appinstall.RunningInstalled() {
+		return nil
+	}
+	// Relaunch the installed binary so AppData is the running copy.
+	args := make([]string, 0, len(os.Args))
+	for _, a := range os.Args[1:] {
+		switch a {
+		case "-install", "-no-install", "-uninstall":
+			continue
+		}
+		args = append(args, a)
+	}
+	cmd := exec.Command(dest, args...)
+	cmd.Dir = appinstall.Root()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("relaunch installed binary: %w", err)
+	}
+	os.Exit(0)
+	return nil
+}
+
+// installDesktopShortcuts copies this binary into LocalAppData and refreshes
+// Desktop / Start Menu shortcuts.
+func (h *host) installDesktopShortcuts() {
+	dest, _, err := appinstall.Ensure()
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	if err := appinstall.CreateShortcuts(dest); err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	dialog.ShowInformation("Installed",
+		fmt.Sprintf("Pathfinder is at:\n%s\n\nDesktop and Start Menu shortcuts point at this executable.", dest),
+		h.win)
+}
+
+func (h *host) uninstallDesktop() {
+	dialog.ShowConfirm("Uninstall",
+		"Remove the LocalAppData PathfinderSSH MSP copy and Desktop/Start Menu shortcuts?\n\nYour sessions.yaml and vault under ~/.pathfinderssh are kept.",
+		func(ok bool) {
+			if !ok {
+				return
+			}
+			if err := appinstall.Uninstall(); err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			dialog.ShowInformation("Uninstalled", "AppData install and shortcuts removed. You can close this window.", h.win)
+		}, h.win)
+}
+
+// offerFirstRunSetup prompts for SecureCRT import when the session tree is empty.
+func (h *host) offerFirstRunSetup() {
+	if h.tree == nil {
+		return
+	}
+	if n := len(h.tree.Tree().Nodes()); n > 0 {
+		return
+	}
+	msg := "No sessions yet.\n\nImport your SecureCRT folder tree now? Passwords are not imported — use the vault afterward.\n\nYou can also use File → Import SecureCRT later."
+	dialog.ShowConfirm("First-run setup", msg, func(ok bool) {
+		if !ok {
+			return
+		}
+		h.importSecureCRT()
+	}, h.win)
 }
 
 // offerVaultCreate raises the first-run warning when this run found no vault.
@@ -2288,36 +2722,309 @@ func (h *host) promptHostKey(hostname string, remote net.Addr, key ssh.PublicKey
 }
 
 // promptSecret answers password and keyboard-interactive challenges the node
-// did not supply material for.
-func (h *host) promptSecret(prompt string, echo bool) (string, error) {
-	answer := make(chan string, 1)
+// did not supply material for. When the prompt looks like a password (not an
+// OTP/passphrase), a "Save password" checkbox stores the secret in the vault
+// and links this session to that credential — unlocking/creating the vault
+// first when needed (the previous silent skip when locked is why saves never
+// stuck).
+func (h *host) promptSecret(folder, oldLabel string, n *sessions.Node, prompt string, echo bool) (string, error) {
+	type answer struct {
+		text string
+		save bool
+	}
+	ch := make(chan answer, 1)
+	label := strings.TrimSpace(prompt)
+	if label == "" {
+		label = "Password"
+	}
+	canSave := !echo && passwordPromptSavable(label)
+
 	fyne.Do(func() {
 		field := widget.NewPasswordEntry()
 		if echo {
 			field = widget.NewEntry()
 		}
-		field.SetPlaceHolder(strings.TrimSpace(prompt))
-		items := []*widget.FormItem{widget.NewFormItem(strings.TrimSpace(prompt), field)}
+		field.SetPlaceHolder(label)
+
+		items := []*widget.FormItem{widget.NewFormItem(label, field)}
+		var saveBox *widget.Check
+		if canSave {
+			saveBox = widget.NewCheck("Save password for next time", nil)
+			saveBox.SetChecked(true)
+			items = append(items, widget.NewFormItem("", saveBox))
+		}
+
 		d := dialog.NewForm("Authentication", "Send", "Cancel", items,
 			func(ok bool) {
-				if ok {
-					answer <- field.Text
+				if !ok {
+					ch <- answer{}
 					return
 				}
-				answer <- ""
+				save := saveBox != nil && saveBox.Checked
+				ch <- answer{text: field.Text, save: save}
 			}, h.win)
-		d.Resize(fyne.NewSize(420, 200))
+		d.Resize(fyne.NewSize(460, 240))
 		d.Show()
-		// The one that stings most: a password typed at a device
-		// challenge, with Return doing nothing.
 		ui.EnterConfirmsForm(h.win, items, d.Submit)
 	})
+
 	select {
-	case s := <-answer:
-		return s, nil
+	case a := <-ch:
+		if a.save && strings.TrimSpace(a.text) != "" {
+			if h.ensureVaultUnlockedBlocking() {
+				h.persistDialPassword(folder, oldLabel, n, a.text)
+			} else {
+				log.Printf("[vault] save skipped — vault was not unlocked")
+			}
+		}
+		return a.text, nil
 	case <-time.After(120 * time.Second):
 		return "", fmt.Errorf("authentication prompt timed out")
 	}
+}
+
+// ensureVaultUnlockedBlocking unlocks or creates the vault on the UI thread and
+// blocks the caller (dial goroutine) until the operator answers. Used when a
+// password save was requested.
+func (h *host) ensureVaultUnlockedBlocking() bool {
+	if h.vault != nil {
+		return true
+	}
+	done := make(chan bool, 1)
+	fyne.Do(func() {
+		path := h.vaultPath
+		if path == "" {
+			path = vaultcli.DefaultPath()
+		}
+		pass := widget.NewPasswordEntry()
+		pass.SetPlaceHolder("master password")
+		remember := widget.NewCheck("Remember in the OS keyring", nil)
+		remember.SetChecked(true)
+
+		_, missing := os.Stat(path)
+		title := "Unlock vault to save password"
+		action := "Unlock"
+		if missing != nil {
+			title = "Create vault to save password"
+			action = "Create"
+		}
+		items := []*widget.FormItem{
+			widget.NewFormItem("Master password", pass),
+			widget.NewFormItem("", remember),
+		}
+		d := dialog.NewForm(title, action, "Don't save", items, func(ok bool) {
+			if !ok {
+				done <- false
+				return
+			}
+			master := pass.Text
+			if len(master) < 8 {
+				dialog.ShowError(fmt.Errorf("master password must be at least 8 characters"), h.win)
+				done <- false
+				return
+			}
+			if missing != nil {
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					dialog.ShowError(err, h.win)
+					done <- false
+					return
+				}
+				v := vault.New(path)
+				if err := v.Create(master); err != nil {
+					dialog.ShowError(err, h.win)
+					done <- false
+					return
+				}
+				h.vaultPath = path
+				h.adopt(v)
+			} else {
+				v, err := vaultcli.OpenWith(path, master)
+				if err != nil {
+					dialog.ShowError(err, h.win)
+					done <- false
+					return
+				}
+				h.vaultPath = path
+				h.adopt(v)
+			}
+			if remember.Checked {
+				if err := vaultcli.KeyringSet(path, master); err != nil {
+					log.Printf("[vault] keyring: %v", err)
+				}
+			}
+			done <- true
+		}, h.win)
+		d.Resize(fyne.NewSize(480, 260))
+		d.Show()
+		ui.EnterConfirmsForm(h.win, items, d.Submit)
+	})
+	select {
+	case ok := <-done:
+		return ok && h.vault != nil
+	case <-time.After(180 * time.Second):
+		return false
+	}
+}
+
+// passwordPromptSavable reports whether a challenge is a password worth storing
+// (not an OTP, token, or key passphrase).
+func passwordPromptSavable(prompt string) bool {
+	p := strings.ToLower(prompt)
+	for _, skip := range []string{
+		"passphrase", "otp", "totp", "token", "verification", "authenticator",
+		"one-time", "one time", "mfa", "2fa", "pin",
+	} {
+		if strings.Contains(p, skip) {
+			return false
+		}
+	}
+	return true
+}
+
+// persistDialPassword writes the typed password into the vault and stamps
+// Credential onto n so the post-connect inventory write links the session.
+func (h *host) persistDialPassword(folder, oldLabel string, n *sessions.Node, password string) {
+	if h.vault == nil || n == nil || strings.TrimSpace(password) == "" {
+		return
+	}
+
+	credName := strings.TrimSpace(n.Credential)
+	if credName == "" {
+		credName = vaultCredNameFor(*n)
+	}
+
+	username := strings.TrimSpace(n.Username)
+	if existing, err := h.vault.Get(credName); err == nil {
+		existing.Password = password
+		if username != "" {
+			existing.Username = username
+		}
+		if strings.TrimSpace(existing.AuthType) == "" {
+			existing.AuthType = "password"
+		}
+		if err := h.vault.Update(existing); err != nil {
+			log.Printf("[vault] update credential %q: %v", credName, err)
+			return
+		}
+		credName = existing.Name
+	} else {
+		c, err := h.vault.Add(vault.Credential{
+			Name:     credName,
+			Username: username,
+			AuthType: "password",
+			Password: password,
+		})
+		if err != nil {
+			if errors.Is(err, vault.ErrDuplicateName) {
+				credName = uniqueVaultCredName(h.vault, credName)
+				c, err = h.vault.Add(vault.Credential{
+					Name:     credName,
+					Username: username,
+					AuthType: "password",
+					Password: password,
+				})
+			}
+			if err != nil {
+				log.Printf("[vault] add credential %q: %v", credName, err)
+				return
+			}
+		}
+		credName = c.Name
+	}
+
+	n.Credential = credName
+	n.Password = "" // dial uses vault via Credential; do not keep inline after save
+	n.AuthType = sessions.AuthPassword
+	log.Printf("[vault] stored credential %q for %s (folder=%q)", credName, n.Label(), folder)
+
+	// Refresh lookup so this same dial (and the next double-click) resolve it.
+	fyne.Do(func() { h.refreshVault() })
+
+	// Write credential: into sessions.yaml immediately when we know the folder,
+	// so a failed dial after auth still leaves auto-login wired.
+	if folder == "" || h.tree == nil {
+		return
+	}
+	done := make(chan struct{})
+	fyne.Do(func() {
+		defer close(done)
+		label := oldLabel
+		if label == "" {
+			label = n.Normalize().Label()
+		}
+		tr := h.tree.Tree()
+		f, err := tr.FolderAt(folder)
+		if err != nil {
+			log.Printf("[vault] link session: %v", err)
+			return
+		}
+		j := f.SessionIndex(label)
+		if j < 0 {
+			j = f.SessionIndex(n.Normalize().Label())
+		}
+		if j < 0 {
+			log.Printf("[vault] link session: no %q in %q", label, folder)
+			return
+		}
+		upd := f.Sessions[j]
+		upd.Credential = credName
+		upd.Password = ""
+		upd.AuthType = sessions.AuthPassword
+		if username != "" {
+			upd.Username = username
+		}
+		replLabel := f.Sessions[j].Label()
+		if err := tr.Replace(folder, replLabel, upd); err != nil {
+			log.Printf("[vault] link session replace: %v", err)
+			return
+		}
+		h.tree.SetTree(tr)
+		if err := sessions.SaveFile(h.sessionsPath, tr); err != nil {
+			log.Printf("[vault] link session save: %v", err)
+			return
+		}
+		log.Printf("[vault] linked session %q → credential %q", replLabel, credName)
+	})
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Printf("[vault] link session timed out waiting for UI thread")
+	}
+}
+
+// vaultCredNameFor picks a stable vault entry name for a dialled session.
+func vaultCredNameFor(n sessions.Node) string {
+	n = n.Normalize()
+	if label := strings.TrimSpace(n.Label()); label != "" {
+		if u := strings.TrimSpace(n.Username); u != "" {
+			return u + "@" + label
+		}
+		return label
+	}
+	if u := strings.TrimSpace(n.Username); u != "" && strings.TrimSpace(n.Host) != "" {
+		return u + "@" + n.Host
+	}
+	if host := strings.TrimSpace(n.Host); host != "" {
+		return host
+	}
+	return "saved-password"
+}
+
+func uniqueVaultCredName(v *vault.Vault, base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "saved-password"
+	}
+	if _, err := v.Get(base); err != nil {
+		return base
+	}
+	for i := 2; i < 1000; i++ {
+		cand := fmt.Sprintf("%s-%d", base, i)
+		if _, err := v.Get(cand); err != nil {
+			return cand
+		}
+	}
+	return fmt.Sprintf("%s-%d", base, time.Now().Unix())
 }
 
 // listPorts feeds the serial dropdown. On macOS prefer a /dev/cu.* entry over

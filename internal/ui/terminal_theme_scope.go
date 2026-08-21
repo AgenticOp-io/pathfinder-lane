@@ -49,11 +49,18 @@ func (t *NativeTerminalWidget) SetTerminalTheme(name string) {
 	}
 	t.termTheme.override = name
 	t.termTheme.palette = nil // force a rebuild on next access
+	t.termTheme.resolved = "" // ensure refreshTermTheme does not short-circuit
 	t.refreshTermTheme()
 
 	if t.baseBG != nil {
 		t.baseBG.FillColor = t.termBG()
 		t.baseBG.Refresh()
+	}
+	// Drop cached cell styles so the next paint re-resolves every glyph against
+	// the new palette (the diff path compares color values and would otherwise
+	// keep stale CustomTextGridStyle pointers that still look "equal" enough).
+	if t.textGrid != nil {
+		t.textGrid.Rows = nil
 	}
 	t.updatePending.Store(true)
 }

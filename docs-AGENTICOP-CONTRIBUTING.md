@@ -56,7 +56,8 @@ Keep `main` aligned with upstream; do not develop long-lived work on `main`.
 | Change | Land in |
 | --- | --- |
 | App / Fyne / crawl / vault / sessions | this engine → PR upstream |
-| `START.bat`, seed wizard, SecureCRT import packaging | `products\pathfinder` |
+| Packaging / AppData install | `products\pathfinder` (`pathfinder.exe -install`) |
+
 | Frontend CRT-replacement roadmap | `products\pathfinder\ROADMAP-FRONTEND.md` |
 
 Upstream is GPL-3.0. Match existing code style and security non-negotiables

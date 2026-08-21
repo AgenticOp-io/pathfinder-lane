@@ -47,10 +47,24 @@ func cmdImportSecureCRT(args []string) error {
 
 	if *preview || *dry {
 		counts := make([]map[string]any, 0, len(folders))
-		for _, f := range folders {
-			counts = append(counts, map[string]any{"folder": f.Name, "sessions": len(f.Sessions)})
+		var walk func(prefix string, list []sessions.Folder)
+		walk = func(prefix string, list []sessions.Folder) {
+			for _, f := range list {
+				path := f.Name
+				if prefix != "" {
+					path = sessions.JoinPath(prefix, f.Name)
+				}
+				counts = append(counts, map[string]any{
+					"folder":   path,
+					"sessions": len(f.Sessions),
+					"children": len(f.Folders),
+				})
+				walk(path, f.Folders)
+			}
 		}
+		walk("", folders)
 		summary["folderList"] = counts
+		summary["folderNodes"] = len(counts)
 		return json.NewEncoder(os.Stdout).Encode(summary)
 	}
 

@@ -25,6 +25,9 @@ type VirtualScrollState struct {
 
 // DEBUG: Add detailed buffer state logging
 func (t *NativeTerminalWidget) logBufferState(context string) {
+	if !debugEnabled {
+		return
+	}
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
 
@@ -482,6 +485,11 @@ func (t *NativeTerminalWidget) setStyledRows(lines []string, attrs [][]gopyte.At
 // composite when the terminal is wrapped in a theme override for per-tab font
 // size, whereas the grid always paints.
 func (t *NativeTerminalWidget) cellColors(lineAttrs []gopyte.Attributes, c, r int, sel *selRange) (fg, bg color.Color) {
+	// Default text follows the terminal palette; default background stays
+	// transparent so the single baseBG rectangle shows through. Painting
+	// termBG() into every cell made TextGrid refresh ~cols*rows opaque
+	// rectangles per frame and made typing feel frozen.
+	fg = t.termFG()
 	if c >= 0 && c < len(lineAttrs) {
 		attr := lineAttrs[c]
 
@@ -504,7 +512,7 @@ func (t *NativeTerminalWidget) cellColors(lineAttrs []gopyte.Attributes, c, r in
 			fg = t.mapFg(attr.Fg)
 		}
 
-		bg = t.mapColor(attr.Bg)
+		bg = t.mapColor(attr.Bg) // nil = default; baseBG shows through
 	}
 	if sel != nil && sel.contains(r, c) {
 		bg = selectionColor

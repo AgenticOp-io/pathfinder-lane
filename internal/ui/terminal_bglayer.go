@@ -90,6 +90,11 @@ func (l *bgLayer) Update(attrs [][]gopyte.Attributes, sel *selRange) {
 		}
 	}
 
+	// Typing with no SGR backgrounds: skip Refresh when still empty.
+	if len(runs) == 0 && len(l.runs) == 0 {
+		l.runs = runs
+		return
+	}
 	l.runs = runs
 	l.Refresh()
 }

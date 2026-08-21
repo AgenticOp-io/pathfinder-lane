@@ -40,7 +40,7 @@ type AboutInfo struct {
 }
 
 // DefaultAppName is used when AboutInfo.Name is empty.
-const DefaultAppName = "PathfinderSSH"
+const DefaultAppName = "PathfinderSSH MSP"
 
 // Heading is the product name as shown.
 func (a AboutInfo) Heading() string {

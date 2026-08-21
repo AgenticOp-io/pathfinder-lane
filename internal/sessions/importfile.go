@@ -202,46 +202,55 @@ func (s ImportSummary) Describe() string {
 	return b.String()
 }
 
-// ImportFolders merges a whole session file into the tree.
-//
-// Each source folder keeps its own name, because that structure is the part a
-// person authored by hand and the part an import has no business flattening.
-// Sessions are still skipped tree-wide by address, so re-importing the same
-// file — or a colleague's file that overlaps with this one — adds only what is
-// genuinely new and leaves every name and setting already edited alone.
-//
-// An empty folder in the source is created anyway. It is structure somebody
-// made deliberately, and an import that silently dropped it would be lossy in a
-// way nothing reports.
+// ImportFolders merges a whole session file into the tree, preserving nested
+// folder structure. Each source folder keeps its path; sessions are still
+// skipped tree-wide by address.
 func (t *Tree) ImportFolders(folders []Folder) ImportSummary {
 	var s ImportSummary
+	t.importFoldersAt("", folders, &s)
+	return s
+}
 
+func (t *Tree) importFoldersAt(prefix string, folders []Folder, s *ImportSummary) {
 	for _, f := range folders {
 		name := strings.TrimSpace(f.Name)
 		if name == "" {
 			name = "Imported"
 		}
-		isNew := t.FolderIndex(name) < 0
+		path := name
+		if prefix != "" {
+			path = JoinPath(prefix, name)
+		}
+		_, err := t.FolderAt(path)
+		isNew := err != nil
 
-		if len(f.Sessions) == 0 {
+		if len(f.Sessions) == 0 && len(f.Folders) == 0 {
 			if isNew {
-				if err := t.AddFolder(name); err == nil {
-					s.Created = append(s.Created, name)
+				if err := t.AddFolder(path); err == nil {
+					s.Created = append(s.Created, path)
 				}
 			}
 			continue
 		}
 
-		res := t.Import(name, f.Sessions)
-		// Import creates the folder lazily, through Add. So it exists now
-		// only if something actually landed in it — which is exactly when
-		// it is worth telling the person a folder appeared.
-		if isNew && t.FolderIndex(name) >= 0 {
-			s.Created = append(s.Created, name)
+		if len(f.Sessions) > 0 {
+			res := t.Import(path, f.Sessions)
+			if isNew {
+				if _, err := t.FolderAt(path); err == nil {
+					s.Created = append(s.Created, path)
+				}
+			}
+			s.merge(res)
+		} else if isNew {
+			if err := t.AddFolder(path); err == nil {
+				s.Created = append(s.Created, path)
+			}
 		}
-		s.merge(res)
+
+		if len(f.Folders) > 0 {
+			t.importFoldersAt(path, f.Folders, s)
+		}
 	}
-	return s
 }
 
 // nameList renders a handful of names and counts the rest. A dialog listing

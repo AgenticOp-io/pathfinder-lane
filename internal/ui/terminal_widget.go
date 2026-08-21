@@ -100,8 +100,12 @@ type NativeTerminalWidget struct {
 	fontSize   float32
 	charWidth  float32
 	charHeight float32
-	cols       int
-	rows       int
+	// measCell caches MeasureText / readback results so Layout and hit-tests
+	// do not remeasure on every frame while the user drags a split.
+	measCellW, measCellH float32
+	measCellOK           bool
+	cols                 int
+	rows                 int
 
 	// Enhanced virtual scrolling state
 	virtualScroll VirtualScrollState
@@ -125,6 +129,11 @@ type NativeTerminalWidget struct {
 	lastHeight  float32
 	resizeTimer *time.Timer
 	resizeMutex sync.Mutex
+
+	// remoteResize coalesces SSH WindowChange onto one background worker.
+	remoteCols     atomic.Int32
+	remoteRows     atomic.Int32
+	remoteResizeOn atomic.Bool
 
 	// Selection support
 	selectionStart fyne.Position
@@ -372,7 +381,7 @@ func NewNativeTerminalWidget() *NativeTerminalWidget {
 
 		// Event handling
 		hasFocus:       false,
-		debugEvents:    true,
+		debugEvents:    false,
 		lastScrollTime: time.Now(),
 
 		// Initialize virtual scroll state
@@ -810,26 +819,12 @@ func (r *unifiedTerminalRenderer) Layout(size fyne.Size) {
 	r.content.Resize(size)
 
 	widget := r.widget
-	// The scrollbar occupies a fixed gutter on the right; exclude it so the
-	// computed column count matches the grid's actual drawable width.
-	cols, rows := widget.CalculateTerminalSize(size.Width-vScrollbarWidth, size.Height)
-
-	widget.mutex.RLock()
-	currentCols, currentRows := widget.cols, widget.rows
-	needsUpdate := cols != currentCols || rows != currentRows
-	widget.mutex.RUnlock()
-
-	if needsUpdate {
-		log.Printf("Layout: Unified terminal resize from %dx%d to %dx%d",
-			currentCols, currentRows, cols, rows)
-
-		// Same width the decision above was made on. Passing size.Width here
-		// instead made the two disagree by exactly the gutter: Layout decided
-		// "153 columns" and then performResize computed 155 from the full
-		// width, so the widget told the far end it had two more columns than
-		// the grid can actually draw, and the last two columns of every wide
-		// line landed under the scrollbar.
-		widget.handleResizeUnified(size.Width-vScrollbarWidth, size.Height)
+	// Do NOT CalculateTerminalSize here. Layout fires continuously while the
+	// user drags a split or resizes the window; measuring text and logging on
+	// every frame froze the UI. Debounce geometry in handleResize instead.
+	w := size.Width - vScrollbarWidth
+	if w > 0 && size.Height > 0 {
+		widget.handleResizeUnified(w, size.Height)
 	}
 }
 
@@ -1270,20 +1265,13 @@ func (t *NativeTerminalWidget) updateUnifiedScrollBar(f frame, viewport VirtualS
 	// sitting a few pixels high, and once anything else zeroed the offset, a
 	// visible jump down and back on every click as this put it back.
 	//
-	// The Refresh, however, is load-bearing: it is what marks the canvas dirty
-	// after a frame. Removing the whole block froze the display -- input still
-	// reached the device, nothing appeared on screen -- which is indistinguishable
-	// from losing the keyboard. So the refresh stays and the offset does not.
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		fyne.Do(func() {
-			if t.scroll == nil {
-				return
-			}
-			t.scroll.pinOffset()
-			t.scroll.Scroll.Refresh()
-		})
-	}()
+	// The Refresh marks the canvas dirty after a frame. Do it inline on the
+	// paint path (already on the UI thread via fyne.Do) — a delayed second
+	// fyne.Do per frame flooded the queue under load and felt like a freeze.
+	if t.scroll != nil {
+		t.scroll.pinOffset()
+		t.scroll.Scroll.Refresh()
+	}
 }
 
 // SetTargetLabel records which device this terminal is connected to, for the
@@ -1485,11 +1473,13 @@ func (t *NativeTerminalWidget) AcceptsTab() bool {
 
 // ENHANCED UPDATE PROCESSOR - Same as before but with logging
 func (t *NativeTerminalWidget) updateProcessor() {
-	ticker := time.NewTicker(33 * time.Millisecond) // ~30 FPS
+	// ~60 FPS: keystroke echo is remote (SSH) then paint; a 30 FPS ceiling
+	// added a noticeable extra frame of lag on top of RTT.
+	ticker := time.NewTicker(16 * time.Millisecond)
 	defer ticker.Stop()
 
 	var lastUpdateTime time.Time
-	updateCooldown := 16 * time.Millisecond
+	updateCooldown := 8 * time.Millisecond
 	updateCount := 0
 
 	log.Printf("Unified update processor started for %s", runtime.GOOS)
@@ -1514,9 +1504,7 @@ func (t *NativeTerminalWidget) updateProcessor() {
 					continue
 				}
 				updateCount++
-
-				// Log occasionally for monitoring
-				if updateCount%100 == 0 {
+				if debugEnabled && updateCount%100 == 0 {
 					log.Printf("Update processor (%s): %d redraws completed", runtime.GOOS, updateCount)
 				}
 			}
@@ -1594,7 +1582,7 @@ func (t *NativeTerminalWidget) handleResizeUnified(width, height float32) {
 // ResyncSize recomputes the grid from the widget's CURRENT size and applies it
 // immediately, cancelling any pending debounce.
 //
-// Normal resizes come from the renderer's Layout and are debounced by 150ms,
+// Normal resizes come from the renderer's Layout and are debounced by 250ms,
 // which is right for a window being dragged: the far end gets one size, not
 // forty. It is wrong for a terminal that has just been MOVED into another
 // window. Canvas.SetContent lays new content out at its MINIMUM size first, so
@@ -1896,35 +1884,32 @@ func (t *NativeTerminalWidget) findWordBoundaries(line string, col int) (start, 
 // exactly what a denser app theme introduced). Falls back to the fontSize ratio
 // before the grid has any rows.
 func (t *NativeTerminalWidget) gridCellSize() (cw, ch float32) {
+	if t.measCellOK && t.measCellW > 0 && t.measCellH > 0 {
+		return t.measCellW, t.measCellH
+	}
 	// FIRST CHOICE: read the cell back OUT of the grid rather than predicting it.
-	// PositionForCursorLocation(row, col) returns (col*cellSize.Width,
-	// row*cellSize.Height), so (1,1) IS the cell -- the exact divisor
-	// CursorLocationForPosition uses to turn a pixel into a row. A readback cannot
-	// disagree with the grid; a recomputation can, and when it does, nothing in
-	// the stack is able to report the disagreement because each side is
-	// internally consistent. Measured on macOS at fontSize 17: the grid's cell is
-	// 10.00x20.00 while the fontSize-ratio estimate says 9.35x19.55 - a 3.3% error
-	// that compounds into a full row within 20 lines.
 	if rcw, rch, ok := t.gridCellSizeReadback(); ok {
+		t.measCellW, t.measCellH, t.measCellOK = rcw, rch, true
 		return rcw, rch
 	}
 
-	// FALLBACK, used only before Fyne has built the grid's renderer: compute the
-	// cell the SAME way widget.TextGrid does internally - MeasureText("M",
-	// fontSize, Monospace), width and height rounded. We do NOT read it from
-	// textGrid.MinSize(), because when the terminal is inside a
-	// container.NewThemeOverride the grid RENDERS at the override's text size
-	// while MinSize can still resolve against the global app theme - the two
-	// diverge and selection/overlay land nowhere near the glyphs.
+	// FALLBACK before the grid has a renderer.
 	if t.fontSize > 0 {
 		sz := fyne.MeasureText("M", t.fontSize, fyne.TextStyle{Monospace: true})
 		cw = float32(math.Round(float64(sz.Width)))
 		ch = float32(math.Round(float64(sz.Height)))
 		if cw > 0 && ch > 0 {
+			t.measCellW, t.measCellH, t.measCellOK = cw, ch, true
 			return cw, ch
 		}
 	}
 	return t.charWidth, t.charHeight
+}
+
+// invalidateCellSizeCache forces the next gridCellSize() to remeasure. Call
+// after a font-size change (new connection or live apply).
+func (t *NativeTerminalWidget) invalidateCellSizeCache() {
+	t.measCellOK = false
 }
 
 // cellHeight is gridCellSize's height, for the viewport calculators. They run on

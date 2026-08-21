@@ -18,7 +18,9 @@ Work lives on branch `feature/crt-frontend-roadmap` → https://github.com/Agent
 | Button bar (`buttons.yaml`, active/all) | `internal/buttons` + shell SendTo* |
 | SFTP client library | `internal/sftpclient` (panel UI next) |
 | File → Import SecureCRT | `cmd/pathfinder` |
-| Setup wizard CRT button | `products/pathfinder/Setup-Seeds.ps1` |
+| First-run SecureCRT import | in-app dialog (`pathfinder.exe`) |
+| App install / shortcuts | `pathfinder.exe` / `-install` (no START.bat) |
+
 | Rebuilt `pathfinder.exe` + `pfseed.exe` | `products/pathfinder/windows/` |
 
 Verified dry-run on this machine: **786** importable / **19** skipped / **206** folders from VanDyke Config.
@@ -33,7 +35,7 @@ Verified dry-run on this machine: **786** importable / **19** skipped / **206** 
 - Discovery actions overflow grouping
 
 ### Phase B
-- True nested folders (B2a) instead of path-encoded names
+- True nested folders (B2a) — **done**: sessions.yaml v2, recursive tree UI, CRT import nests Customers → site → vendor
 - Re-import merge UX feedback in wizard
 
 ### Phase C

@@ -152,8 +152,11 @@ type Instance struct {
 	closed atomic.Bool
 }
 
-// ID is the instance's stable identifier.
-func (i *Instance) ID() int { return i.info.ID }
+// Applet is the hosted view. Safe to call from the UI goroutine.
+func (i *Instance) Applet() Applet { return i.mount.Applet }
+
+// Instances lists every open tab/window. UI goroutine only.
+func (s *Shell) Instances() []*Instance { return s.instances() }
 
 // Title is the unique display title.
 func (i *Instance) Title() string { return i.info.Title }
@@ -479,7 +482,7 @@ func (i *Instance) stopRepaint() {
 
 // repaintInterval matches the terminal's own ~30fps update processor, so a
 // detached session is no less responsive than a docked one.
-const repaintInterval = 33 * time.Millisecond
+const repaintInterval = 16 * time.Millisecond
 
 // canvas is the canvas this instance is currently displayed on.
 //
@@ -562,7 +565,7 @@ func (s *Shell) StopFocusWatch() {
 // focusWatchInterval is deliberately slower than the repaint ticker: this loop
 // is a safety net rather than a rendering path, and a quarter second is below
 // the threshold at which a person reaches for the mouse.
-const focusWatchInterval = 250 * time.Millisecond
+const focusWatchInterval = 500 * time.Millisecond
 
 // reclaimFocus takes keyboard focus back, but ONLY when nothing at all holds
 // it.

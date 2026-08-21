@@ -61,7 +61,7 @@ const usage = `pfseed — create PathfinderSSH session seeds
 discover prints JSON of hosts from ~/.ssh/config and (on Windows) PuTTY.
 apply merges those hosts into sessions.yaml without overwriting other folders.
 import-securecrt reads VanDyke Sessions\**\*.ini (no passwords). Nested CRT
-folders become Pathfinder folder names joined with " / ".
+folders become nested Pathfinder folders (Customers → site → vendor).
 import-csv accepts VanDyke-style headers: session_name,hostname,protocol,folder,port,username,description.
 `
 

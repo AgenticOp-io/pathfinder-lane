@@ -16,7 +16,7 @@ import (
 // Session is one SecureCRT .ini session (no secrets).
 type Session struct {
 	Name     string
-	Folder   string // path relative to Sessions, levels joined with " / "
+	Folder   string // path relative to Sessions; "A / B" or slash form
 	Host     string
 	Port     int
 	User     string
@@ -198,9 +198,9 @@ func ToNode(cs Session) sessions.Node {
 	return n.Normalize()
 }
 
-// Folders groups supported sessions into Pathfinder folders (path-encoded names).
+// Folders builds a nested Pathfinder folder tree from CRT sessions.
 func Folders(list []Session) (folders []sessions.Folder, supported, skipped int) {
-	by := map[string][]sessions.Node{}
+	var root sessions.Tree
 	for _, cs := range list {
 		if cs.Protocol == "unsupported" {
 			skipped++
@@ -210,13 +210,19 @@ func Folders(list []Session) (folders []sessions.Folder, supported, skipped int)
 		if folder == "" {
 			folder = "SecureCRT"
 		}
-		by[folder] = append(by[folder], ToNode(cs))
+		path := sessions.JoinPath(sessions.SplitPath(folder)...)
+		if path == "" {
+			path = "SecureCRT"
+		}
+		if err := root.Add(path, ToNode(cs)); err != nil {
+			// Duplicate label in same folder: keep first, count as supported
+			// still so preview totals stay honest; skip the clash.
+			supported++
+			continue
+		}
 		supported++
 	}
-	for name, nodes := range by {
-		folders = append(folders, sessions.Folder{Name: name, Sessions: nodes})
-	}
-	return folders, supported, skipped
+	return root.Folders, supported, skipped
 }
 
 // DefaultConfig returns the usual Windows VanDyke Config path, or "".

@@ -310,7 +310,7 @@ func (f *SessionForm) build() {
 	f.credential = widget.NewSelect(f.credentialChoices(), func(string) { f.applyCredentialState() })
 	f.authType = widget.NewSelect(sessions.AuthTypes, func(string) { f.applyCredentialState() })
 	f.password = widget.NewPasswordEntry()
-	f.password.SetPlaceHolder("not saved to the session file")
+	f.password.SetPlaceHolder("saved to vault on Connect")
 	f.keyPath = entry("~/.ssh/id_ed25519")
 	f.keyPass = widget.NewPasswordEntry()
 	f.keyPass.SetPlaceHolder("not saved to the session file")
@@ -325,7 +325,11 @@ func (f *SessionForm) build() {
 
 	labels, labelToKey, keyToLabel := ThemeMenuData()
 	f.labelToThemeKey, f.themeKeyToLabel = labelToKey, keyToLabel
-	f.termTheme = widget.NewSelect(labels, nil)
+	// Leading inherit entry: empty node theme means follow Settings → Terminal theme.
+	themeChoices := append([]string{ThemeInherit}, labels...)
+	f.labelToThemeKey[ThemeInherit] = ""
+	f.themeKeyToLabel[""] = ThemeInherit
+	f.termTheme = widget.NewSelect(themeChoices, nil)
 	f.fontSize = widget.NewSelect(fontSizeChoices(), nil)
 	f.scrollback = entry("inherit")
 	f.termType = entry("xterm-256color")
@@ -406,19 +410,31 @@ func (f *SessionForm) connectionTab() fyne.CanvasObject {
 	// typeable.
 	serialRows := [][2]fyne.CanvasObject{row("Serial port", f.serialPort)}
 	if f.opts.ListSerialPorts != nil {
-		f.serialPortSel = widget.NewSelect(f.opts.ListSerialPorts(), func(s string) {
+		// Start empty and fill async — enumerating COM ports on the UI thread
+		// stalled every Connect dialog open (including pure SSH sessions).
+		f.serialPortSel = widget.NewSelect(nil, func(s string) {
 			if s != "" {
 				f.serialPort.SetText(s)
 			}
 		})
 		f.serialPortSel.PlaceHolder = "(detected ports)"
-		refresh := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() {
-			f.serialPortSel.SetOptions(f.opts.ListSerialPorts())
-			f.serialPortSel.Refresh()
-		})
-		// Border with the button on the trailing edge: the button keeps its
-		// own minimum and the select absorbs the rest, so this row never
-		// asks for more width than one field.
+		refreshPorts := func() {
+			if f.opts.ListSerialPorts == nil {
+				return
+			}
+			go func() {
+				ports := f.opts.ListSerialPorts()
+				fyne.Do(func() {
+					if f.serialPortSel == nil {
+						return
+					}
+					f.serialPortSel.SetOptions(ports)
+					f.serialPortSel.Refresh()
+				})
+			}()
+		}
+		refresh := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), refreshPorts)
+		refreshPorts()
 		serialRows = append(serialRows,
 			row("Detected", container.NewBorder(nil, nil, nil, refresh, f.serialPortSel)))
 	}
@@ -700,21 +716,27 @@ func (f *SessionForm) setSerialPort(p string) {
 }
 
 func (f *SessionForm) themeLabelFor(key string) string {
-	if key == "" {
-		key = DefaultTerminalTheme
-	}
 	if label, ok := f.themeKeyToLabel[key]; ok {
 		return label
+	}
+	if key == "" {
+		return ThemeInherit
 	}
 	return key
 }
 
 func (f *SessionForm) themeKeyFor(label string) string {
+	if label == ThemeInherit || strings.TrimSpace(label) == "" {
+		return ""
+	}
 	if key, ok := f.labelToThemeKey[label]; ok {
 		return key
 	}
 	return label
 }
+
+// ThemeInherit is the session-form choice for "use Settings → Terminal theme".
+const ThemeInherit = "(inherit)"
 
 // CredentialDefaultPrefix opens the blank entry's label when a default exists.
 // Both spellings of the blank entry map back to "" — the default can change
