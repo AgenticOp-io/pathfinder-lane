@@ -16,7 +16,9 @@ Work lives on branch `feature/crt-frontend-roadmap` → https://github.com/Agent
 | Folder session counts in tree | `internal/ui/treemodel.go` |
 | Recent-session touch on activate | `internal/recent` + host |
 | Button bar (`buttons.yaml`, active/all) | `internal/buttons` + shell SendTo* |
-| SFTP client library | `internal/sftpclient` (panel UI next) |
+| SFTP file transfer UI | Session → Transfer files / tab Files action |
+| YAML session scripts | `internal/scripts` + Scripts toolbar |
+
 | File → Import SecureCRT | `cmd/pathfinder` |
 | First-run SecureCRT import | in-app dialog (`pathfinder.exe`) |
 | App install / shortcuts | `pathfinder.exe` / `-install` (no START.bat) |

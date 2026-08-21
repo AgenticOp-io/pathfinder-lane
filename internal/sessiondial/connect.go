@@ -94,6 +94,13 @@ type Options struct {
 	// Log receives one line per connection describing what was dialed and
 	// how. nil discards it.
 	Log func(format string, args ...any)
+
+	// ReachTimeout bounds the pre-dial TCP check. Zero uses DefaultReachTimeout
+	// (capped by the session's connect timeout when shorter).
+	ReachTimeout time.Duration
+
+	// SkipReachCheck disables the TCP probe (tests / callers that already probed).
+	SkipReachCheck bool
 }
 
 func (o Options) logf(format string, args ...any) {
@@ -176,6 +183,15 @@ func Connect(ctx context.Context, n sessions.Node, o Options) (term.Transport, e
 // dial is the three-way transport switch, and it exists exactly once. The node
 // arrives already normalized and validated by Connect.
 func dial(ctx context.Context, n sessions.Node, o Options) (term.Transport, error) {
+	if !o.SkipReachCheck && n.Transport != sessions.TransportSerial {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := ProbeNode(n, o.resolve, o.ReachTimeout); err != nil {
+			return nil, err
+		}
+		o.logf("[reach] %s is accepting TCP", n.Target())
+	}
 	switch n.Transport {
 	case sessions.TransportSerial:
 		return connectSerial(n, o)

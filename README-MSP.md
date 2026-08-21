@@ -21,3 +21,15 @@ does not appear beside the app.
 - `Unassigned/` — flat list for connections not filed under a customer
 
 Legacy SecureCRT `3_Customers` trees are migrated into this layout on startup.
+
+## Logo
+
+Default window / About / `.exe` icon is the **AgenticOps** mark.
+
+Override without rebuilding:
+
+- `%USERPROFILE%\.pathfinderssh\logo.png`
+- `%LOCALAPPDATA%\PathfinderSSH-MSP\logo.png`
+- env `PATHFINDERSSH_LOGO`, or `-logo path\to\file.png`
+
+Rebuild with a new PE icon via `cmd/pathfinder/winres/` + `go-winres` (see `internal/ui/assets/README.md`).

@@ -40,7 +40,6 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 
 	"github.com/scottpeterman/pathfinderssh/internal/help"
 )
@@ -133,14 +132,13 @@ func showHelpError(w fyne.Window, err error) {
 //	if b := HelpButton(w, help.TopicCrawl); b != nil {
 //	    row.Add(b)
 //	}
-func HelpButton(w fyne.Window, topic help.Topic) *widget.Button {
+func HelpButton(w fyne.Window, topic help.Topic) *TipButton {
 	if !HelpAvailable() {
 		return nil
 	}
-	b := widget.NewButtonWithIcon("", theme.HelpIcon(), func() {
+	b := TipIconButtonLow("Help", theme.HelpIcon(), func() {
 		ShowHelp(w, topic)
 	})
-	b.Importance = widget.LowImportance
 	return b
 }
 

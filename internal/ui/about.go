@@ -35,13 +35,13 @@ import (
 // this; it is never scaled up past its own size by Contain, so a small asset
 // stays crisp and a large one is bounded.
 const (
-	aboutLogoWidth  float32 = 420
-	aboutLogoHeight float32 = 200
+	aboutLogoWidth  float32 = 280
+	aboutLogoHeight float32 = 280
 
 	// Tall enough for the logo, the three heading lines and three detail
 	// rows without scrolling. The scroll is the overflow path for a host
 	// that reports more than that, not the normal case.
-	aboutDialogHeight float32 = 600
+	aboutDialogHeight float32 = 680
 )
 
 // ShowAbout opens the About box over w.

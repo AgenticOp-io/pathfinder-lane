@@ -1,7 +1,7 @@
 // Package sftpclient is a thin SFTP helper over an existing ssh.Client.
 //
-// The Fyne side panel will call this; nothing here draws UI. SCP is out of
-// scope for v1 of this package.
+// The Fyne file-transfer dialog calls this; nothing here draws UI. Prefer SFTP
+// over classic SCP — same job, supported by OpenSSH and network gear alike.
 package sftpclient
 
 import (

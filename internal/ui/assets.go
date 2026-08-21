@@ -1,44 +1,150 @@
-// internal/ui/assets.go
+// Package ui — product images compiled into the binary, with runtime overrides.
 //
-// Images compiled into the binary.
+// # Customizing the logo
 //
-// # Why the directory is embedded and not the file
+// Resolution order for Logo() / AppIcon():
 //
-// //go:embed pathfinderlogo.png would be a BUILD FAILURE on any tree where
-// somebody has not put the file there yet — a clone, a CI runner, a machine
-// where the asset was gitignored by accident. Embedding the DIRECTORY compiles
-// either way, and a missing logo then costs the logo instead of the build.
-// Logo() returns nil, and the About box lays itself out without it.
+//  1. Env PATHFINDERSSH_LOGO (or PATHFINDER_LOGO) — path to a .png/.jpg/.svg
+//  2. {AppHome}/logo.png          (default ~/.pathfinderssh/logo.png)
+//  3. {InstallRoot}/logo.png      (%LOCALAPPDATA%\PathfinderSSH-MSP\logo.png)
+//  4. Embedded assets/app-logo.png (AgenticOps mark by default)
+//  5. Embedded assets/pathfinderlogo.png (legacy About filename)
 //
-// The cost is that a typo in the filename is silent. That is the right trade
-// here: the picture is decoration and the application is not, and a tool that
-// refuses to compile because an image is missing is a tool that cannot be
-// built from a fresh checkout.
+// The Windows .exe file icon is baked in at build time from
+// assets/app-icon.ico (see cmd/pathfinder/winres). Replace that file and
+// rebuild to change Explorer / taskbar identity for the PE itself.
 package ui
 
 import (
 	"embed"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 
 	"fyne.io/fyne/v2"
+
+	"github.com/scottpeterman/pathfinderssh/internal/appinstall"
 )
 
-// assetFS holds internal/ui/assets. Add images there; nothing else reads it.
-//
 //go:embed assets
 var assetFS embed.FS
 
-// logoFile is where the splash logo lives when there is one.
-const logoFile = "assets/pathfinderlogo.png"
+const (
+	embeddedLogoFile = "assets/app-logo.png"
+	embeddedLegacy   = "assets/pathfinderlogo.png"
+	embeddedIconFile = "assets/app-icon.png"
+)
 
-// Logo returns the product logo, or nil when the binary was built without one.
-//
-// Callers must handle nil. It is not an error worth reporting: an application
-// that opened a dialog to say its picture is missing would be worse than the
-// missing picture.
+var (
+	logoOnce   sync.Once
+	logoRes    fyne.Resource
+	iconOnce   sync.Once
+	iconRes    fyne.Resource
+	overrideMu sync.Mutex
+	// test / product hooks
+	logoOverridePath string
+)
+
+// SetLogoPath forces Logo()/AppIcon() to load from path (empty clears).
+// Intended for tests and for -logo CLI flags.
+func SetLogoPath(path string) {
+	overrideMu.Lock()
+	logoOverridePath = strings.TrimSpace(path)
+	overrideMu.Unlock()
+	logoOnce = sync.Once{}
+	iconOnce = sync.Once{}
+	logoRes, iconRes = nil, nil
+}
+
+// Logo returns the product splash / About logo, or nil when none is available.
 func Logo() fyne.Resource {
-	data, err := assetFS.ReadFile(logoFile)
+	logoOnce.Do(func() {
+		logoRes = loadLogoResource(false)
+	})
+	return logoRes
+}
+
+// AppIcon returns a square-ish icon for the window / taskbar, falling back to Logo.
+func AppIcon() fyne.Resource {
+	iconOnce.Do(func() {
+		iconRes = loadLogoResource(true)
+		if iconRes == nil {
+			iconRes = Logo()
+		}
+	})
+	return iconRes
+}
+
+func loadLogoResource(preferIcon bool) fyne.Resource {
+	for _, path := range logoCandidatePaths(preferIcon) {
+		if res := resourceFromFile(path); res != nil {
+			return res
+		}
+	}
+	if preferIcon {
+		if res := resourceFromEmbed(embeddedIconFile); res != nil {
+			return res
+		}
+	}
+	if res := resourceFromEmbed(embeddedLogoFile); res != nil {
+		return res
+	}
+	return resourceFromEmbed(embeddedLegacy)
+}
+
+func logoCandidatePaths(preferIcon bool) []string {
+	var out []string
+	overrideMu.Lock()
+	forced := logoOverridePath
+	overrideMu.Unlock()
+	if forced != "" {
+		out = append(out, forced)
+	}
+	for _, env := range []string{"PATHFINDERSSH_LOGO", "PATHFINDER_LOGO"} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			out = append(out, v)
+		}
+	}
+	home := GetAppHome()
+	if preferIcon {
+		out = append(out,
+			filepath.Join(home, "icon.png"),
+			filepath.Join(home, "logo.png"),
+		)
+	} else {
+		out = append(out,
+			filepath.Join(home, "logo.png"),
+			filepath.Join(home, "icon.png"),
+		)
+	}
+	root := appinstall.Root()
+	if root != "" {
+		out = append(out,
+			filepath.Join(root, "logo.png"),
+			filepath.Join(root, "icon.png"),
+		)
+	}
+	return out
+}
+
+func resourceFromFile(path string) fyne.Resource {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	return fyne.NewStaticResource("pathfinderlogo.png", data)
+	name := filepath.Base(path)
+	return fyne.NewStaticResource(name, data)
+}
+
+func resourceFromEmbed(name string) fyne.Resource {
+	data, err := assetFS.ReadFile(name)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	return fyne.NewStaticResource(filepath.Base(name), data)
 }

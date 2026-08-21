@@ -30,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"fyne.io/fyne/v2"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/scottpeterman/pathfinderssh/internal/gopyte"
 	"github.com/scottpeterman/pathfinderssh/internal/term"
@@ -242,6 +243,17 @@ func (s *Session) transport() term.Transport {
 	s.tpMu.RLock()
 	defer s.tpMu.RUnlock()
 	return s.tp
+}
+
+// SSHClient returns the live crypto/ssh client when this session is over SSH.
+// Telnet and serial return false. Used for SFTP on the same connection.
+func (s *Session) SSHClient() (*ssh.Client, bool) {
+	tp := s.transport()
+	ts, ok := tp.(*term.Session)
+	if !ok || ts == nil {
+		return nil, false
+	}
+	return ts.SSHClient()
 }
 
 // syncSize pushes the widget's current grid size to the transport. It is a
@@ -550,7 +562,10 @@ func (s *Session) Close() error {
 func (s *Session) SetStateChangeHandler(fn func(ConnectionState)) { s.onStateChange = fn }
 
 // SetName labels the session for logs and the transcript filename.
-func (s *Session) SetName(name string) { s.name = name }
+func (s *Session) SetName(name string) {
+	s.name = name
+	s.scrollbackTitle = name
+}
 
 // SetSessionLogEnabled controls whether Attach starts a transcript.
 func (s *Session) SetSessionLogEnabled(v bool) { s.sessionLogEnabled = v }

@@ -42,6 +42,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	ttwidget "github.com/dweymouth/fyne-tooltip/widget"
 )
 
 // Applet is what the shell can host. CrawlView and CaptureView already satisfy
@@ -141,7 +142,7 @@ type Instance struct {
 	// move would discard the applet's widget state.
 	root   fyne.CanvasObject
 	status *widget.Label
-	place  *widget.Button
+	place  *ttwidget.Button
 
 	tab *container.TabItem
 	win fyne.Window
@@ -304,9 +305,9 @@ func (s *Shell) Registry() *Registry { return s.reg }
 // AddLauncher puts a button in the toolbar. The host supplies the function,
 // which is what keeps dialers and dialogs out of this file.
 func (s *Shell) AddLauncher(label string, icon fyne.Resource, fn func()) {
-	var b *widget.Button
+	var b fyne.CanvasObject
 	if icon != nil {
-		b = widget.NewButtonWithIcon(label, icon, fn)
+		b = TipButtonLabeled(label, icon, fn)
 	} else {
 		b = widget.NewButton(label, fn)
 	}
@@ -341,10 +342,8 @@ func (s *Shell) Open(m Mount) *Instance {
 	}
 	inst.status.Truncation = fyne.TextTruncateEllipsis
 
-	inst.place = widget.NewButtonWithIcon("", theme.ViewFullScreenIcon(), inst.togglePlacement)
-	closeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), inst.Close)
-	closeBtn.Importance = widget.LowImportance
-	inst.place.Importance = widget.LowImportance
+	inst.place = TipIconButtonLow("Detach to own window", theme.ViewFullScreenIcon(), inst.togglePlacement)
+	closeBtn := TipIconButtonLow("Close", theme.CancelIcon(), inst.Close)
 
 	left := container.NewHBox(m.Actions...)
 	right := container.NewHBox(inst.place, closeBtn)
@@ -480,9 +479,10 @@ func (i *Instance) stopRepaint() {
 	}
 }
 
-// repaintInterval matches the terminal's own ~30fps update processor, so a
-// detached session is no less responsive than a docked one.
-const repaintInterval = 16 * time.Millisecond
+// repaintInterval for detached windows. Matching the docked 60fps paint loop
+// doubled UI-thread load and made clicks hang; 20fps is enough for selection
+// visibility without starving input.
+const repaintInterval = 50 * time.Millisecond
 
 // canvas is the canvas this instance is currently displayed on.
 //
@@ -777,7 +777,7 @@ func (i *Instance) Detach() {
 
 	w := i.shell.app.NewWindow(i.info.Title)
 	w.Resize(detachedWindowSize)
-	w.SetContent(i.root)
+	w.SetContent(WithTooltips(i.root, w.Canvas()))
 
 	// Lay the content out at the size it is ABOUT to have. SetContent has
 	// just sized it to its minimum, and the terminal's resize is debounced
@@ -796,6 +796,7 @@ func (i *Instance) Detach() {
 	i.win = w
 	i.shell.reg.SetPlacement(i.info.ID, Detached)
 	i.place.SetIcon(theme.ViewRestoreIcon())
+	i.place.SetToolTip("Redock to main window")
 	i.shell.refreshSummary()
 	w.Show()
 
@@ -843,6 +844,7 @@ func (i *Instance) Redock() {
 	i.shell.tabs.Select(i.tab)
 	i.shell.reg.SetPlacement(i.info.ID, Docked)
 	i.place.SetIcon(theme.ViewFullScreenIcon())
+	i.place.SetToolTip("Detach to own window")
 	i.shell.refreshSummary()
 	i.shell.win.RequestFocus()
 

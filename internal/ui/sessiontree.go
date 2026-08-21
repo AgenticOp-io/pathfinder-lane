@@ -206,12 +206,12 @@ func (t *SessionTree) build() {
 	// Connect, new session/folder/customer, edit, delete.
 	// Drag a row onto a folder to move it (sessions or folders).
 	actions := container.NewGridWithColumns(6,
-		widget.NewButtonWithIcon("", theme.LoginIcon(), t.connectSelected),
-		widget.NewButtonWithIcon("", theme.ContentAddIcon(), t.newSession),
-		widget.NewButtonWithIcon("", theme.FolderNewIcon(), t.newFolder),
-		widget.NewButtonWithIcon("", theme.AccountIcon(), t.newCustomer),
-		widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), t.editSelected),
-		widget.NewButtonWithIcon("", theme.DeleteIcon(), t.deleteSelected),
+		TipIconButton("Connect selected session", theme.LoginIcon(), t.connectSelected),
+		TipIconButton("New session", theme.ContentAddIcon(), t.newSession),
+		TipIconButton("New folder", theme.FolderNewIcon(), t.newFolder),
+		TipIconButton("New customer", theme.AccountIcon(), t.newCustomer),
+		TipIconButton("Edit selected", theme.DocumentCreateIcon(), t.editSelected),
+		TipIconButton("Delete selected", theme.DeleteIcon(), t.deleteSelected),
 	)
 
 	bottom := container.NewVBox(actions, t.status)
@@ -267,7 +267,7 @@ func (t *SessionTree) setStatus(filter string) {
 	total := t.sessionTotal
 	switch {
 	case total == 0 && filter == "":
-		t.status.SetText("Customers + Unassigned — File → Import SecureCRT fills Unassigned")
+		t.status.SetText("Empty — File → Import SecureCRT (pick customer list folder)")
 	case filter == "":
 		t.status.SetText(fmt.Sprintf("%d sessions", total))
 	case t.view.Matched == 0:
@@ -583,7 +583,7 @@ type sessionRow struct {
 	icon   *widget.Icon
 	label  *widget.Label
 	detail *widget.Label
-	more   *widget.Button
+	more   *TipButton
 	right  *fyne.Container
 	box    *fyne.Container
 }
@@ -616,12 +616,11 @@ func newSessionRow(t *SessionTree) *sessionRow {
 	// Session rows only. It reads r.uid when it is pressed rather than
 	// capturing it: rows are reused as the tree scrolls, so a captured uid
 	// would edit whichever session happened to be drawn in this row first.
-	r.more = widget.NewButtonWithIcon("", theme.MoreHorizontalIcon(), func() {
+	r.more = TipIconButtonLow("Edit session", theme.MoreHorizontalIcon(), func() {
 		if r.tree != nil && r.uid != "" {
 			r.tree.rowEdit(r.uid)
 		}
 	})
-	r.more.Importance = widget.LowImportance
 
 	r.icon = widget.NewIcon(theme.FolderIcon())
 

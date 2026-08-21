@@ -432,8 +432,11 @@ func (w *WideCharScreen) getProgressiveHistoryContent() []string {
 
 	totalAvailableLines := HistorySize + w.lines
 
-	// Calculate how much content to show
-	displayLines := w.lines * 3 // Show 3 screens worth for context
+	// Calculate how much content to show — one viewport only.
+	// An earlier version used lines*3 for "context", but every paint under
+	// history mode rebuilt three screens under screen.mu and starved the UI
+	// thread (clicks felt frozen). Wheel already scrolls the viewport.
+	displayLines := w.lines
 	if displayLines > totalAvailableLines {
 		displayLines = totalAvailableLines
 	}

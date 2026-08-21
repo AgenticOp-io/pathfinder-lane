@@ -77,8 +77,9 @@ type SettingsForm struct {
 	consoleBaud *widget.Select
 	pasteWarn   *widget.Entry
 
-	logDir     *widget.Entry
-	logStamped *widget.Check
+	logDir       *widget.Entry
+	logStamped   *widget.Check
+	captureDef   *widget.Check
 
 	antiIdle      *widget.Check
 	antiIdleSecs  *widget.Entry
@@ -119,6 +120,7 @@ func (f *SettingsForm) SetSettings(s Settings) {
 
 	f.logDir.SetText(v.LogDirectory)
 	f.logStamped.SetChecked(v.TimestampLogs)
+	f.captureDef.SetChecked(v.CaptureByDefault)
 
 	f.antiIdle.SetChecked(v.AntiIdleEnabled)
 	f.antiIdleSecs.SetText(v.AntiIdleIntervalSec)
@@ -149,8 +151,9 @@ func (f *SettingsForm) read() SettingsFields {
 		PasteConsoleBaud: f.consoleBaud.Selected,
 		PasteWarnLines:   f.pasteWarn.Text,
 
-		LogDirectory:  f.logDir.Text,
-		TimestampLogs: f.logStamped.Checked,
+		LogDirectory:     f.logDir.Text,
+		TimestampLogs:    f.logStamped.Checked,
+		CaptureByDefault: f.captureDef.Checked,
 
 		AntiIdleEnabled:     f.antiIdle.Checked,
 		AntiIdleIntervalSec: f.antiIdleSecs.Text,
@@ -177,6 +180,7 @@ func (f *SettingsForm) build() {
 
 	f.logDir = entry(GetLogsDir())
 	f.logStamped = widget.NewCheck("Prefix each line with a wall-clock time", nil)
+	f.captureDef = widget.NewCheck("Capture every new session to a transcript file", nil)
 
 	f.antiIdle = widget.NewCheck("Keep idle sessions alive", func(bool) {
 		f.applyAntiIdleState()
@@ -216,6 +220,9 @@ func (f *SettingsForm) terminalTab() fyne.CanvasObject {
 		form(
 			row("Scrollback lines", f.scrollback),
 		),
+		widget.NewLabel("How many history lines each terminal keeps. Mouse wheel / trackpad\n"+
+			"scrolls through that history. Saving settings updates open sessions too.\n"+
+			"A session can override this number in its inventory form."),
 		widget.NewSeparator(),
 		widget.NewLabel("Paste pacing. The two delays solve different failures and\n"+
 			"neither substitutes for the other: the line delay gives a device\n"+
@@ -239,10 +246,13 @@ func (f *SettingsForm) sessionsTab() fyne.CanvasObject {
 
 	return container.NewVScroll(container.NewVBox(
 		widget.NewLabel("Transcripts. A blank directory writes to the application's\n"+
-			"logs directory, shown on the Paths page."),
+			"logs directory, shown on the Paths page. Use Capture on a live session\n"+
+			"tab (or right-click → Start Logging) to record from now on; Save scrollback\n"+
+			"writes what is already on screen."),
 		form(
 			row("Transcript directory", f.logDir),
 			row("Timestamps", f.logStamped),
+			row("Capture by default", f.captureDef),
 		),
 		widget.NewSeparator(),
 		widget.NewLabel("Anti-idle sends a harmless keystroke after a quiet interval so a\n"+

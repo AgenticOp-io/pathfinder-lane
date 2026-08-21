@@ -70,8 +70,9 @@ type SettingsFields struct {
 	PasteConsoleBaud string
 	PasteWarnLines   string
 
-	LogDirectory  string
-	TimestampLogs bool
+	LogDirectory     string
+	TimestampLogs    bool
+	CaptureByDefault bool
 
 	AntiIdleEnabled     bool
 	AntiIdleIntervalSec string
@@ -91,8 +92,9 @@ func SettingsFieldsOf(s Settings) SettingsFields {
 		PasteConsoleBaud: consoleBaudLabel(s.PasteConsoleBaud),
 		PasteWarnLines:   strconv.Itoa(s.PasteWarnLines),
 
-		LogDirectory:  s.LogDirectory,
-		TimestampLogs: s.TimestampLogs,
+		LogDirectory:     s.LogDirectory,
+		TimestampLogs:    s.TimestampLogs,
+		CaptureByDefault: s.CaptureByDefault,
 
 		AntiIdleEnabled:     s.AntiIdleEnabled,
 		AntiIdleIntervalSec: strconv.Itoa(s.AntiIdleIntervalSec),
@@ -172,6 +174,7 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 	// means the default logs directory, so it is not an error.
 	out.LogDirectory = ExpandHome(f.LogDirectory)
 	out.TimestampLogs = f.TimestampLogs
+	out.CaptureByDefault = f.CaptureByDefault
 
 	out.AntiIdleEnabled = f.AntiIdleEnabled
 	if n, err := settingsInt("Anti-idle interval", f.AntiIdleIntervalSec,

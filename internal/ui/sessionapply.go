@@ -100,7 +100,7 @@ func ApplySession(s *Session, n sessions.Node) {
 	// the target label here gives all four front ends a paste confirmation
 	// that names the device without any of them being touched.
 	s.SetTargetLabel(pasteTargetLabel(n))
-	s.SetSessionLogEnabled(n.LogEnabled)
+	s.SetSessionLogEnabled(n.LogEnabled || CurrentSettings().CaptureByDefault)
 	s.SetAntiIdle(ResolveAntiIdle(AntiIdleOverrideFor(n)))
 	if n.TerminalTheme != "" {
 		// An unregistered name reverts to inheriting the global setting

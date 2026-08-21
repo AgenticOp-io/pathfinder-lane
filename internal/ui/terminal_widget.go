@@ -213,6 +213,10 @@ type NativeTerminalWidget struct {
 	// instead of wedging the widget.
 	redrawStarted atomic.Int64
 
+	// paintSlowUntil is UnixNano until which the update loop uses a longer
+	// cooldown (~30 FPS) so a heavy paint burst cannot starve clicks.
+	paintSlowUntil atomic.Int64
+
 	// Per-terminal terminal-theme scope (see cli/terminal_theme_scope.go). The
 	// zero value inherits the global Settings -> Terminal Theme, so every
 	// existing NativeTerminalWidget{...} literal keeps working unchanged.
@@ -221,6 +225,9 @@ type NativeTerminalWidget struct {
 	// Find-in-scrollback bar (see cli/terminal_find.go). Built lazily in
 	// CreateRenderer; nil until the widget is first rendered.
 	find *findController
+
+	// scrollbackTitle names Save Scrollback files (set from Session.SetName).
+	scrollbackTitle string
 
 	// focusHost is the object that is ACTUALLY in the canvas object tree, which
 	// for an SSH/telnet/serial tab is the *Session wrapper, not this
@@ -884,14 +891,14 @@ func (t *NativeTerminalWidget) performRedrawUnified() bool {
 				dlogf("performRedrawUnified: RENDER PANIC (alternate=%v): %v", f.isAlternate, r)
 			}
 		}()
+		paintStart := time.Now()
 		if f.isAlternate {
 			t.renderAlternateScreenUnified(f)
 		} else {
-			// shouldAutoScroll was !f.inHistoryMode, and inHistoryMode came
-			// from the pty manager -- nil on every non-local session, so this
-			// has always been true in practice. Scrollback is handled by
-			// f.viewingHist, which is read from the screen and actually wired.
 			t.renderNormalModeUnified(f, true)
+		}
+		if time.Since(paintStart) > 12*time.Millisecond {
+			t.paintSlowUntil.Store(time.Now().Add(250 * time.Millisecond).UnixNano())
 		}
 	})
 	return true
@@ -902,7 +909,7 @@ func (t *NativeTerminalWidget) performRedrawUnified() bool {
 // larger than the tick interval: the point is to bound a permanent wedge, not
 // to second-guess a slow frame. A frame that legitimately takes this long has
 // a different problem.
-const redrawStaleAfter = 2 * time.Second
+const redrawStaleAfter = 5 * time.Second
 
 // claimRedraw takes the in-flight guard, or reclaims it from a paint that was
 // dispatched long enough ago to be considered lost. It reports whether the
@@ -1265,10 +1272,11 @@ func (t *NativeTerminalWidget) updateUnifiedScrollBar(f frame, viewport VirtualS
 	// sitting a few pixels high, and once anything else zeroed the offset, a
 	// visible jump down and back on every click as this put it back.
 	//
-	// The Refresh marks the canvas dirty after a frame. Do it inline on the
-	// paint path (already on the UI thread via fyne.Do) — a delayed second
-	// fyne.Do per frame flooded the queue under load and felt like a freeze.
-	if t.scroll != nil {
+	// The custom scrollbar already Refresh()s itself in SetState. Refreshing
+	// the HybridScroll container on EVERY paint queued another full layout on
+	// the UI thread and made clicks wait behind terminal burst frames. Only
+	// re-layout the scroll host when viewing history (geometry actually moves).
+	if t.scroll != nil && f.viewingHist {
 		t.scroll.pinOffset()
 		t.scroll.Scroll.Refresh()
 	}
@@ -1473,13 +1481,12 @@ func (t *NativeTerminalWidget) AcceptsTab() bool {
 
 // ENHANCED UPDATE PROCESSOR - Same as before but with logging
 func (t *NativeTerminalWidget) updateProcessor() {
-	// ~60 FPS: keystroke echo is remote (SSH) then paint; a 30 FPS ceiling
-	// added a noticeable extra frame of lag on top of RTT.
+	// Target ~60 FPS for remote echo, but back off when a recent paint was
+	// expensive so the Fyne UI thread can still service clicks.
 	ticker := time.NewTicker(16 * time.Millisecond)
 	defer ticker.Stop()
 
 	var lastUpdateTime time.Time
-	updateCooldown := 8 * time.Millisecond
 	updateCount := 0
 
 	log.Printf("Unified update processor started for %s", runtime.GOOS)
@@ -1488,25 +1495,24 @@ func (t *NativeTerminalWidget) updateProcessor() {
 		select {
 		case <-ticker.C:
 			now := time.Now()
-			// Test-and-clear BEFORE dispatching. The old order cleared the flag
-			// after performRedrawUnified returned, so a chunk that arrived while
-			// the snapshot was being taken set updatePending and then had it
-			// wiped - one lost frame, and if it was the last chunk of a burst
-			// there was no later tick to recover it. That is the "tail doesn't
-			// render until I hit a key" path. Clearing first means such a chunk
-			// re-arms the flag and paints on the next tick instead.
-			if now.Sub(lastUpdateTime) >= updateCooldown && t.updatePending.CompareAndSwap(true, false) {
-				lastUpdateTime = now
-				if !t.performRedrawUnified() {
-					// In-flight guard skipped the paint; re-arm so the latest
-					// state still lands on a later tick.
-					t.updatePending.Store(true)
-					continue
-				}
-				updateCount++
-				if debugEnabled && updateCount%100 == 0 {
-					log.Printf("Update processor (%s): %d redraws completed", runtime.GOOS, updateCount)
-				}
+			cooldown := 8 * time.Millisecond
+			if until := t.paintSlowUntil.Load(); until != 0 && now.UnixNano() < until {
+				cooldown = 32 * time.Millisecond
+			}
+			if now.Sub(lastUpdateTime) < cooldown {
+				continue
+			}
+			if !t.updatePending.CompareAndSwap(true, false) {
+				continue
+			}
+			lastUpdateTime = now
+			if !t.performRedrawUnified() {
+				t.updatePending.Store(true)
+				continue
+			}
+			updateCount++
+			if debugEnabled && updateCount%100 == 0 {
+				log.Printf("Update processor (%s): %d redraws completed", runtime.GOOS, updateCount)
 			}
 		case <-t.ctx.Done():
 			log.Printf("Unified update processor stopping after %d updates", updateCount)
@@ -2063,36 +2069,27 @@ func (t *NativeTerminalWidget) DoubleTapped(event *fyne.PointEvent) {
 		}
 	}
 
-	// Get display lines
-	allLines := t.screen.GetDisplay()
-	viewport := t.calculateUnifiedViewport(allLines)
-
-	// Index into the current display window...
-	windowRow := viewport.scrollOffset + row
-	// ...and the corresponding STABLE absolute virtual-buffer line.
-	topAbs := t.screen.GetViewportStart() + viewport.scrollOffset
-	absRow := topAbs + row
-
-	if windowRow >= 0 && windowRow < len(allLines) {
-		line := allLines[windowRow]
-		start, end := t.findWordBoundaries(line, col)
-
-		dprintf("Word boundaries: col %d -> start=%d, end=%d\n", col, start, end)
-
-		// Anchor the selection in absolute coordinates (endCol exclusive).
-		t.selection.SetSelection(absRow, start, absRow, end)
-
-		// Get and copy text
-		selectedText := t.selection.GetSelectedText()
-		dprintf("Selected text: %q\n", selectedText)
-
-		if selectedText != "" {
-			t.selection.CopyToClipboard()
-		}
-
-		// Force redraw to show selection
-		t.updatePending.Store(true)
+	if t.screen == nil {
+		return
 	}
+	// One absolute line — not a full GetDisplay() rebuild under screen.mu.
+	topAbs := t.screen.GetViewportStart()
+	absRow := topAbs + row
+	lines := t.screen.GetLinesInRange(absRow, absRow+1)
+	if len(lines) == 0 {
+		return
+	}
+	line := lines[0]
+	start, end := t.findWordBoundaries(line, col)
+	t.selection.SetSelection(absRow, start, absRow, end)
+	selectedText := t.selection.GetSelectedText()
+	if selectedText != "" {
+		// Off the UI thread: Win32 clipboard can block for hundreds of ms.
+		go func(s string) {
+			fyne.CurrentApp().Clipboard().SetContent(s)
+		}(selectedText)
+	}
+	t.updatePending.Store(true)
 }
 
 // Add to terminal_events.go
@@ -2100,10 +2097,6 @@ func (t *NativeTerminalWidget) DoubleTapped(event *fyne.PointEvent) {
 func (t *NativeTerminalWidget) TripleTapped(event *fyne.PointEvent) {
 	dprintf("TripleTapped at %.1f,%.1f - selecting entire line\n", event.Position.X, event.Position.Y)
 
-	// Same hit test as MouseDown and DoubleTapped. This used to divide
-	// Position.Y by the cell height directly, ignoring the grid's origin
-	// entirely -- a third pixel->row mapping for the same question, which is
-	// two too many. The arithmetic remains only as the no-canvas fallback.
 	row, _, ok := t.gridCellAtAbs(event.AbsolutePosition)
 	if !ok {
 		_, ch := t.gridCellSize()
@@ -2112,33 +2105,25 @@ func (t *NativeTerminalWidget) TripleTapped(event *fyne.PointEvent) {
 			row = int(event.Position.Y / ch)
 		}
 	}
-
-	// Get display lines
-	allLines := t.screen.GetDisplay()
-	viewport := t.calculateUnifiedViewport(allLines)
-
-	// Index into the current display window + the stable absolute line.
-	windowRow := viewport.scrollOffset + row
-	topAbs := t.screen.GetViewportStart() + viewport.scrollOffset
-	absRow := topAbs + row
-
-	if windowRow >= 0 && windowRow < len(allLines) {
-		line := allLines[windowRow]
-
-		// Select the entire line (endCol exclusive = rune count).
-		t.selection.SetSelection(absRow, 0, absRow, len([]rune(line)))
-
-		// Get and copy text
-		selectedText := t.selection.GetSelectedText()
-		dprintf("Selected line: %q\n", selectedText)
-
-		if selectedText != "" {
-			t.selection.CopyToClipboard()
-		}
-
-		// Force redraw to show selection
-		t.updatePending.Store(true)
+	if t.screen == nil {
+		return
 	}
+	topAbs := t.screen.GetViewportStart()
+	absRow := topAbs + row
+	lines := t.screen.GetLinesInRange(absRow, absRow+1)
+	if len(lines) == 0 {
+		return
+	}
+	line := lines[0]
+	t.selection.SetSelection(absRow, 0, absRow, len([]rune(line)))
+	selectedText := t.selection.GetSelectedText()
+	if selectedText != "" {
+		go func(s string) {
+			// Off the UI thread: Win32 clipboard can block for hundreds of ms.
+			fyne.CurrentApp().Clipboard().SetContent(s)
+		}(selectedText)
+	}
+	t.updatePending.Store(true)
 }
 
 // ============================================================================

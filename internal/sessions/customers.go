@@ -1,13 +1,14 @@
 // MSP inventory layout: built-in Customers + Unassigned roots.
 //
-// SecureCRT's "3_Customers/…" trees are migrated once: each real customer
-// folder becomes Customers/<name> with sessions flattened into that folder;
-// everything else (including 0_OLD_CUSTOMERS and non-customer CRT folders)
-// lands as a flat list under Unassigned.
+// SecureCRT import is organised by a wizard: the operator picks which CRT
+// top-level folder is the customer list. That folder's children become
+// Customers/<name>/ with nested folders preserved. Everything else moves under
+// Unassigned/, also keeping folder structure.
 package sessions
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -15,14 +16,13 @@ import (
 // product.UnassignedRoot without importing product (keeps this package free of
 // UI/product deps).
 const (
-	DefaultCustomersRoot     = "Customers"
-	DefaultUnassignedRoot    = "Unassigned"
-	LegacyCRTCustomersRoot   = "3_Customers"
+	DefaultCustomersRoot   = "Customers"
+	DefaultUnassignedRoot  = "Unassigned"
+	LegacyCRTCustomersRoot = "3_Customers"
 )
 
-// EnsureMSPLayout creates the built-in roots and migrates a SecureCRT-shaped
-// tree into Customers / Unassigned when needed. Returns whether the tree was
-// changed (so the host can save).
+// EnsureMSPLayout creates the built-in roots when missing. It does not rewrite
+// SecureCRT trees — that is OrganiseCRTImport after the import wizard.
 func (t *Tree) EnsureMSPLayout() (changed bool, err error) {
 	for _, root := range []string{DefaultCustomersRoot, DefaultUnassignedRoot} {
 		if _, e := t.FolderAt(root); e != nil {
@@ -32,95 +32,126 @@ func (t *Tree) EnsureMSPLayout() (changed bool, err error) {
 			changed = true
 		}
 	}
-
-	if _, e := t.FolderAt(LegacyCRTCustomersRoot); e == nil {
-		if e := t.migrateLegacyCRTCustomers(); e != nil {
-			return changed, e
-		}
-		changed = true
-	}
-
-	// Any other top-level folder (old CRT site trees) → flatten into Unassigned.
-	var extras []string
-	for _, f := range t.Folders {
-		name := strings.TrimSpace(f.Name)
-		if name == DefaultCustomersRoot || name == DefaultUnassignedRoot || name == LegacyCRTCustomersRoot {
-			continue
-		}
-		extras = append(extras, name)
-	}
-	for _, name := range extras {
-		f, e := t.FolderAt(name)
-		if e != nil {
-			continue
-		}
-		if e := t.flattenFolderSessionsInto(DefaultUnassignedRoot, *f); e != nil {
-			return changed, e
-		}
-		if e := t.RemoveFolder(name, true); e != nil {
-			return changed, e
-		}
-		changed = true
-	}
 	return changed, nil
 }
 
-func (t *Tree) migrateLegacyCRTCustomers() error {
-	legacy, err := t.FolderAt(LegacyCRTCustomersRoot)
-	if err != nil {
-		return nil
+// ResetMSPInventory clears the tree to empty Customers + Unassigned roots.
+func (t *Tree) ResetMSPInventory() error {
+	t.Folders = nil
+	if err := t.AddFolder(DefaultCustomersRoot); err != nil {
+		return err
 	}
-	for _, child := range append([]Folder(nil), legacy.Folders...) {
+	return t.AddFolder(DefaultUnassignedRoot)
+}
+
+// TopLevelFolderNames returns sorted names of immediate child folders.
+func (t Tree) TopLevelFolderNames() []string {
+	out := make([]string, 0, len(t.Folders))
+	for _, f := range t.Folders {
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TopLevelNamesFromFolders is TopLevelFolderNames for a bare import list.
+func TopLevelNamesFromFolders(folders []Folder) []string {
+	var tr Tree
+	tr.Folders = append([]Folder(nil), folders...)
+	return tr.TopLevelFolderNames()
+}
+
+// OrganiseCRTImport moves a freshly imported SecureCRT tree into MSP roots.
+//
+// customerRoot is a top-level folder name (e.g. "3_Customers"). Its immediate
+// child folders become Customers/<child>/ with nested structure kept. Meta
+// buckets (0_OLD_…) and sessions sitting on the customer root go to Unassigned.
+// Every other top-level folder moves under Unassigned/<name>/ (structure kept).
+//
+// Pass customerRoot "" to send the entire import under Unassigned.
+func (t *Tree) OrganiseCRTImport(customerRoot string) error {
+	if _, err := t.EnsureMSPLayout(); err != nil {
+		return err
+	}
+	customerRoot = strings.TrimSpace(customerRoot)
+
+	if customerRoot != "" {
+		if err := t.adoptCustomerRoot(customerRoot); err != nil {
+			return err
+		}
+	}
+
+	var extras []string
+	for _, f := range t.Folders {
+		name := strings.TrimSpace(f.Name)
+		switch name {
+		case DefaultCustomersRoot, DefaultUnassignedRoot, "":
+			continue
+		default:
+			extras = append(extras, name)
+		}
+	}
+	for _, name := range extras {
+		if err := t.MoveFolder(name, DefaultUnassignedRoot); err != nil {
+			return fmt.Errorf("move %q into Unassigned: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func (t *Tree) adoptCustomerRoot(customerRoot string) error {
+	src, err := t.FolderAt(customerRoot)
+	if err != nil {
+		return fmt.Errorf("customer list folder %q not found in import", customerRoot)
+	}
+
+	// Snapshot children — MoveFolder mutates the parent.
+	children := append([]Folder(nil), src.Folders...)
+	directSessions := append([]Node(nil), src.Sessions...)
+
+	for _, child := range children {
 		name := strings.TrimSpace(child.Name)
 		if name == "" {
 			continue
 		}
+		from := JoinPath(customerRoot, name)
 		if IsMetaCustomerFolder(name) {
-			if err := t.flattenFolderSessionsInto(DefaultUnassignedRoot, child); err != nil {
+			if err := t.MoveFolder(from, DefaultUnassignedRoot); err != nil {
 				return err
 			}
 			continue
 		}
-		path, err := t.CreateCustomer(DefaultCustomersRoot, name)
-		if err != nil {
-			// Already migrated on a previous partial run.
-			if !strings.Contains(err.Error(), "already exists") {
-				return err
+		if err := t.MoveFolder(from, DefaultCustomersRoot); err != nil {
+			// Name already under Customers — merge by moving into a disambiguated folder.
+			if strings.Contains(err.Error(), "already exists") {
+				alt := name + " (imported)"
+				// Rename leaf in place then move.
+				if f, e := t.FolderAt(from); e == nil {
+					f.Name = alt
+					from = JoinPath(customerRoot, alt)
+				}
+				if err := t.MoveFolder(from, DefaultCustomersRoot); err != nil {
+					return err
+				}
+				continue
 			}
-			path = CustomerPath(DefaultCustomersRoot, name)
-		}
-		if err := t.flattenFolderSessionsInto(path, child); err != nil {
 			return err
 		}
 	}
-	// Sessions sitting directly on 3_Customers (rare) → Unassigned.
-	if err := t.flattenFolderSessionsInto(DefaultUnassignedRoot, Folder{Sessions: legacy.Sessions}); err != nil {
-		return err
-	}
-	return t.RemoveFolder(LegacyCRTCustomersRoot, true)
-}
 
-// flattenFolderSessionsInto copies every session in src (recursively) into dest
-// as a flat list. Names that collide are disambiguated with the host.
-func (t *Tree) flattenFolderSessionsInto(dest string, src Folder) error {
-	if _, err := t.EnsurePath(dest); err != nil {
-		return err
+	for _, n := range directSessions {
+		_ = t.addDisambiguated(DefaultUnassignedRoot, n)
 	}
-	var walk func(Folder)
-	walk = func(f Folder) {
-		for _, n := range f.Sessions {
-			n = n.Normalize()
-			if n.Key() == "" && strings.TrimSpace(n.Host) == "" && strings.TrimSpace(n.Name) == "" {
-				continue
-			}
-			_ = t.addDisambiguated(dest, n)
-		}
-		for _, c := range f.Folders {
-			walk(c)
-		}
+	// Clear sessions on the now-empty CRT root, then remove it.
+	if f, err := t.FolderAt(customerRoot); err == nil {
+		f.Sessions = nil
+		f.Folders = nil
 	}
-	walk(src)
-	return nil
+	return t.RemoveFolder(customerRoot, true)
 }
 
 func (t *Tree) addDisambiguated(folder string, n Node) error {
@@ -132,7 +163,6 @@ func (t *Tree) addDisambiguated(folder string, n Node) error {
 		} else {
 			n.Name = want + " (imported)"
 		}
-		// Still colliding? append a counter.
 		if f.SessionIndex(n.Label()) >= 0 {
 			n.Name = n.Label() + " (2)"
 		}

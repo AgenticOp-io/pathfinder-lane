@@ -70,6 +70,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/mapweb"
 	"github.com/scottpeterman/pathfinderssh/internal/product"
 	"github.com/scottpeterman/pathfinderssh/internal/recent"
+	"github.com/scottpeterman/pathfinderssh/internal/scripts"
 	"github.com/scottpeterman/pathfinderssh/internal/serialx"
 	"github.com/scottpeterman/pathfinderssh/internal/sessiondial"
 	"github.com/scottpeterman/pathfinderssh/internal/sessions"
@@ -92,10 +93,15 @@ func main() {
 		doInstall   = flag.Bool("install", false, "copy into LocalAppData\\PathfinderSSH-MSP, create shortcuts, exit")
 		doUninstall = flag.Bool("uninstall", false, "remove LocalAppData\\PathfinderSSH-MSP install and shortcuts, exit")
 		noInstall   = flag.Bool("no-install", false, "run from this folder without copying to AppData")
+		logoPath    = flag.String("logo", "", "override About/window logo PNG (also PATHFINDERSSH_LOGO or ~/.pathfinderssh/logo.png)")
 	)
 	flag.Parse()
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+
+	if strings.TrimSpace(*logoPath) != "" {
+		ui.SetLogoPath(*logoPath)
+	}
 
 	if *doUninstall {
 		if err := appinstall.Uninstall(); err != nil {
@@ -160,6 +166,9 @@ func main() {
 	// Button.CreateRenderer and the panic names a layout function.
 	a := app.New()
 	ui.ApplyAppTheme(a, base.AppVariant())
+	if icon := ui.AppIcon(); icon != nil {
+		a.SetIcon(icon)
+	}
 	w := a.NewWindow("PathfinderSSH MSP")
 	w.Resize(fyne.NewSize(1280, 820))
 
@@ -204,8 +213,7 @@ func main() {
 	h.buildSessionTree(ui.ExpandHome(*sessionsPath))
 	h.buildMenu()
 
-	h.vaultBtn = widget.NewButtonWithIcon("", theme.LoginIcon(), h.showVaultDialog)
-	h.vaultBtn.Importance = widget.LowImportance
+	h.vaultBtn = ui.TipIconButtonLow("Unlock or manage the credential vault", theme.LoginIcon(), h.showVaultDialog)
 	h.shell.AddToolbar(h.vaultBtn)
 
 	// Try the keyring and the environment before the window is up, and
@@ -215,7 +223,7 @@ func main() {
 	h.unlockQuiet()
 	ui.SetHelp(ui.HelpConfig{Version: version})
 
-	w.SetContent(h.shell.Content())
+	w.SetContent(ui.WithTooltips(h.shell.Content(), w.Canvas()))
 	w.SetMaster()
 	w.SetCloseIntercept(func() {
 		// The close box stays live while a dialog is up, so without
@@ -277,7 +285,7 @@ type host struct {
 	// builders, which are handed the open vault rather than a path so
 	// neither can decide to open one on its own.
 	vault    *vault.Vault
-	vaultBtn *widget.Button
+	vaultBtn *ui.TipButton
 
 	creds  []string
 	lookup sessiondial.Lookup
@@ -315,6 +323,9 @@ type host struct {
 	// so a plain bool is the honest type -- an atomic here would suggest
 	// a second writer that does not exist.
 	askingQuit bool
+
+	// scriptCancel stops an in-flight YAML script between steps.
+	scriptCancel atomic.Pointer[context.CancelFunc]
 }
 
 // shutdown ends the application: applets first, then the map server, then the
@@ -458,9 +469,7 @@ func (h *host) buildSessionTree(path string) {
 		log.Printf("[sessions] MSP layout: %v", mErr)
 	} else if changed {
 		if sErr := sessions.SaveFile(h.sessionsPath, tr); sErr != nil {
-			log.Printf("[sessions] save after MSP migrate: %v", sErr)
-		} else {
-			log.Printf("[sessions] migrated inventory to Customers / Unassigned")
+			log.Printf("[sessions] save after MSP roots: %v", sErr)
 		}
 	}
 
@@ -494,6 +503,7 @@ func (h *host) buildSessionTree(path string) {
 	h.tree.SetTree(tr)
 	h.shell.SetSide(h.tree.Content(), 0.25)
 	h.installButtonBar()
+	h.installScriptsBar()
 
 
 	if err != nil {
@@ -656,9 +666,9 @@ func (h *host) saveTree(tr sessions.Tree) {
 // The items are greyed rather than hidden when they do not apply: a control
 // that disappears when there is nothing to close is a control nobody learns
 // is there.
-func (h *host) tabsButton() *widget.Button {
-	var btn *widget.Button
-	btn = widget.NewButtonWithIcon("Tabs", theme.ListIcon(), func() {
+func (h *host) tabsButton() *ui.TipButton {
+	var btn *ui.TipButton
+	btn = ui.TipButtonLabeled("Tabs", theme.ListIcon(), func() {
 		open := h.shell.TabCount()
 		current := h.shell.Current()
 
@@ -682,6 +692,7 @@ func (h *host) tabsButton() *widget.Button {
 			menu, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
 	})
 	btn.Importance = widget.LowImportance
+	btn.SetToolTip("Close tabs")
 	return btn
 }
 
@@ -727,6 +738,14 @@ func (h *host) buildMenu() {
 	}
 	file := fyne.NewMenu("File", fileItems...)
 
+	sessionMenu := fyne.NewMenu("Session",
+		fyne.NewMenuItem("Transfer files (SFTP)…", h.openFileTransfer),
+		fyne.NewMenuItem("Run script…", h.runScriptDialog),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Start / stop capture…", h.toggleCurrentCapture),
+		fyne.NewMenuItem("Save scrollback…", h.saveCurrentScrollback),
+	)
+
 	// A menu as well as the toolbar button. The toolbar answers "is the
 	// vault open"; managing what is IN it is a different question, and
 	// hanging it off the same button would mean either a dialog that asks
@@ -748,7 +767,137 @@ func (h *host) buildMenu() {
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About "+ui.DefaultAppName+"…", h.showAbout),
 	)
-	h.win.SetMainMenu(fyne.NewMainMenu(file, vaultMenu, helpMenu))
+	h.win.SetMainMenu(fyne.NewMainMenu(file, sessionMenu, vaultMenu, helpMenu))
+}
+
+func (h *host) currentTerminal() *ui.Session {
+	inst := h.shell.Current()
+	if inst == nil {
+		return nil
+	}
+	ta, ok := inst.Applet().(*termApplet)
+	if !ok || ta.sess == nil {
+		return nil
+	}
+	return ta.sess
+}
+
+func (h *host) toggleCurrentCapture() {
+	sess := h.currentTerminal()
+	if sess == nil {
+		dialog.ShowInformation("Session Capture", "Open a terminal session first.", h.win)
+		return
+	}
+	_, msg := sess.ToggleLogging()
+	if msg != "" {
+		dialog.ShowInformation("Session Capture", msg, h.win)
+	}
+}
+
+func (h *host) saveCurrentScrollback() {
+	sess := h.currentTerminal()
+	if sess == nil {
+		dialog.ShowInformation("Save Scrollback", "Open a terminal session first.", h.win)
+		return
+	}
+	sess.PromptSaveScrollback()
+}
+
+func (h *host) openFileTransfer() {
+	sess := h.currentTerminal()
+	if sess == nil {
+		dialog.ShowInformation("File Transfer", "Open an SSH terminal session first.", h.win)
+		return
+	}
+	client, ok := sess.SSHClient()
+	if !ok || client == nil {
+		dialog.ShowInformation("File Transfer", "SFTP requires an SSH session (not telnet or serial).", h.win)
+		return
+	}
+	title := "File Transfer (SFTP)"
+	if inst := h.shell.Current(); inst != nil {
+		title = "Files — " + inst.Title()
+	}
+	ui.ShowSFTPDialog(h.win, title, client)
+}
+
+func (h *host) loadScripts() scripts.File {
+	path := scripts.Path(ui.GetAppHome())
+	f, err := scripts.Load(path)
+	if err != nil {
+		log.Printf("[scripts] %v", err)
+		return scripts.Defaults()
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		_ = scripts.Save(path, f)
+	}
+	return f
+}
+
+func (h *host) scriptSender() ui.ScriptSender {
+	return scriptSend{h: h}
+}
+
+type scriptSend struct{ h *host }
+
+func (s scriptSend) SendActive(text string) { s.h.shell.SendToActive(text) }
+func (s scriptSend) SendAll(text string)    { s.h.shell.SendToAllTerminals(text) }
+
+func (h *host) runScriptDialog() {
+	ui.ShowRunScriptDialog(h.win, h.loadScripts(), h.scriptSender(), &h.scriptCancel)
+}
+
+func (h *host) runNamedScript(name string) {
+	f := h.loadScripts()
+	for _, sc := range f.Scripts {
+		if sc.Name != name {
+			continue
+		}
+		if prev := h.scriptCancel.Load(); prev != nil {
+			(*prev)()
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		h.scriptCancel.Store(&cancel)
+		go func(sc scripts.Script) {
+			err := scripts.Run(ctx, sc, h.scriptSender())
+			fyne.Do(func() {
+				h.scriptCancel.Store(nil)
+				if err != nil {
+					dialog.ShowError(err, h.win)
+				}
+			})
+		}(sc)
+		return
+	}
+	dialog.ShowInformation("Scripts", "Script not found: "+name, h.win)
+}
+
+// installScriptsBar loads ~/.pathfinderssh/scripts.yaml onto the toolbar.
+func (h *host) installScriptsBar() {
+	f := h.loadScripts()
+	path := scripts.Path(ui.GetAppHome())
+	menuItems := make([]*fyne.MenuItem, 0, len(f.Scripts)+3)
+	for _, sc := range f.Scripts {
+		sc := sc
+		menuItems = append(menuItems, fyne.NewMenuItem(sc.Name, func() {
+			h.runNamedScript(sc.Name)
+		}))
+	}
+	if len(menuItems) > 0 {
+		menuItems = append(menuItems, fyne.NewMenuItemSeparator())
+	}
+	menuItems = append(menuItems, fyne.NewMenuItem("Run script…", h.runScriptDialog))
+	menuItems = append(menuItems, fyne.NewMenuItem("Edit scripts.yaml…", func() {
+		dialog.ShowInformation("Scripts", "Edit "+path+" and restart Pathfinder.\nEach step: send + optional delay_ms. Use \\n for Return.\nscope: active|all", h.win)
+	}))
+	btn := ui.TipButtonLabeled("Scripts", theme.DocumentIcon(), nil)
+	btn.OnTapped = func() {
+		m := fyne.NewMenu("", menuItems...)
+		widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
+	}
+	btn.Importance = widget.LowImportance
+	btn.SetToolTip("Run YAML scripts into the terminal")
+	h.shell.AddToolbar(btn)
 }
 
 // pickFile opens a read picker filtered to one set of extensions and hands the
@@ -837,29 +986,43 @@ func (h *host) importSecureCRT() {
 			return
 		}
 		folders, supported, skipped := crtimport.Folders(list)
+		top := sessions.TopLevelNamesFromFolders(folders)
 		fyne.Do(func() {
 			prog.Hide()
 			if supported == 0 {
 				dialog.ShowInformation("SecureCRT", fmt.Sprintf("No importable sessions in %s (%d skipped).", cfg, skipped), h.win)
 				return
 			}
-			msg := fmt.Sprintf("Import %d sessions from SecureCRT?\n\n%s\n\nCustomer folders under 3_Customers become Customers/<name>. Other CRT sessions land in Unassigned as a flat list.\n\n%d unsupported (RDP/etc.) will be skipped. Passwords are never imported — use the vault.",
-				supported, cfg, skipped)
-			dialog.ShowConfirm("Import SecureCRT sessions", msg, func(ok bool) {
-				if !ok {
-					return
-				}
-				prog2 := dialog.NewProgressInfinite("SecureCRT", "Merging into session tree…", h.win)
+			ui.ShowCRTImportWizard(h.win, cfg, supported, skipped, top, func(choice ui.CRTImportChoice) {
+				prog2 := dialog.NewProgressInfinite("SecureCRT", "Importing into Customers / Unassigned…", h.win)
 				prog2.Show()
 				go func() {
 					tr := h.tree.Tree()
+					if choice.Replace {
+						if err := (&tr).ResetMSPInventory(); err != nil {
+							fyne.Do(func() {
+								prog2.Hide()
+								dialog.ShowError(err, h.win)
+							})
+							return
+						}
+					} else {
+						_, _ = (&tr).EnsureMSPLayout()
+					}
 					sum := tr.ImportFolders(folders)
+					if err := (&tr).OrganiseCRTImport(choice.CustomerRoot); err != nil {
+						fyne.Do(func() {
+							prog2.Hide()
+							dialog.ShowError(err, h.win)
+						})
+						return
+					}
 					fyne.Do(func() {
 						prog2.Hide()
 						h.applyImport(tr, sessions.FormatNative, sum)
 					})
 				}()
-			}, h.win)
+			})
 		})
 	}()
 }
@@ -891,12 +1054,13 @@ func (h *host) installButtonBar() {
 	menuItems = append(menuItems, fyne.NewMenuItem("Edit buttons.yaml…", func() {
 		dialog.ShowInformation("Button bar", "Edit "+path+" and restart Pathfinder.\nUse \\n for Return.", h.win)
 	}))
-	btn := widget.NewButtonWithIcon("Buttons", theme.MailSendIcon(), nil)
+	btn := ui.TipButtonLabeled("Buttons", theme.MailSendIcon(), nil)
 	btn.OnTapped = func() {
 		m := fyne.NewMenu("", menuItems...)
 		widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
 	}
 	btn.Importance = widget.LowImportance
+	btn.SetToolTip("Send button-bar macros to the terminal")
 	h.shell.AddToolbar(btn)
 }
 
@@ -999,13 +1163,9 @@ func (h *host) askMapImport(defaultFolder string, data []byte) {
 // dialog saying 13 sessions were added, over a file that was never written, is
 // the failure worth ruling out.
 func (h *host) applyImport(tr sessions.Tree, format sessions.Format, sum sessions.ImportSummary) {
-	if _, err := (&tr).EnsureMSPLayout(); err != nil {
-		dialog.ShowError(fmt.Errorf("organise import into Customers/Unassigned: %w", err), h.win)
-		return
-	}
 	h.tree.SetTree(tr)
 	h.saveTree(tr)
-	dialog.ShowInformation("Imported "+format.String(), sum.Describe()+"\n\nOrganised into Customers and Unassigned.", h.win)
+	dialog.ShowInformation("Imported "+format.String(), sum.Describe()+"\n\nOrganised into Customers (your pick) and Unassigned.", h.win)
 }
 
 // exportSessions writes the whole tree to a file of the person's choosing.
@@ -1068,7 +1228,7 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 	var settled atomic.Bool
 
 	progress := dialog.NewCustom("Connecting", "Cancel",
-		widget.NewLabel("Connecting to "+n.Target()+" …"), h.win)
+		widget.NewLabel("Checking reachability of "+n.Target()+" …"), h.win)
 	// A dial that cannot be escaped is worse than a slow one: until this
 	// existed, a serial open that parked in the driver left a modal over the
 	// whole window and the only exit was killing the process. Hot-plugging an
@@ -1215,11 +1375,43 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 		return
 	}
 
+	captureBtn := ui.TipIconButtonLow("Start or stop capturing this session to a transcript", theme.MediaRecordIcon(), nil)
+	saveBtn := ui.TipIconButtonLow("Save scrollback to a file", theme.DocumentSaveIcon(), func() {
+		sess.PromptSaveScrollback()
+	})
+	filesBtn := ui.TipIconButtonLow("Transfer files over SFTP on this SSH session", theme.FolderOpenIcon(), func() {
+		client, ok := sess.SSHClient()
+		if !ok || client == nil {
+			dialog.ShowInformation("File Transfer", "SFTP requires an SSH session (not telnet or serial).", h.win)
+			return
+		}
+		ui.ShowSFTPDialog(h.win, "Files — "+n.Label(), client)
+	})
+	scriptBtn := ui.TipIconButtonLow("Run a YAML script into this terminal", theme.DocumentIcon(), h.runScriptDialog)
+	refreshCaptureTip := func() {
+		if sess.IsLogging() {
+			captureBtn.SetToolTip("Stop capture (transcript is recording)")
+			captureBtn.SetIcon(theme.MediaStopIcon())
+		} else {
+			captureBtn.SetToolTip("Start capture — write a transcript from now on")
+			captureBtn.SetIcon(theme.MediaRecordIcon())
+		}
+	}
+	captureBtn.OnTapped = func() {
+		_, msg := sess.ToggleLogging()
+		refreshCaptureTip()
+		if msg != "" {
+			dialog.ShowInformation("Session Capture", msg, h.win)
+		}
+	}
+	refreshCaptureTip()
+
 	inst := h.shell.Open(ui.Mount{
 		Kind:   ui.KindTerminal,
 		Title:  n.Label(),
 		Applet: &termApplet{content: content, sess: sess},
 		Focus:  sess,
+		Actions: []fyne.CanvasObject{filesBtn, scriptBtn, captureBtn, saveBtn},
 		// The terminal resolves its own canvas for focus-on-click and for
 		// its context menu, and the driver's cache cannot tell it that it
 		// has moved. Without this a detached session goes deaf on the
@@ -2125,8 +2317,26 @@ func (h *host) showSettings() {
 				ui.SetSettings(loaded)
 			}
 			h.refreshOpenTerminalThemes()
+			h.refreshOpenTerminalScrollback()
 		},
 	})
+}
+
+// refreshOpenTerminalScrollback applies Settings.ScrollbackLines to open
+// terminals (session-specific overrides already baked into the widget at open
+// keep their higher value if they set one — we only raise/set the global cap).
+func (h *host) refreshOpenTerminalScrollback() {
+	n := h.base.ScrollbackLines
+	if n <= 0 {
+		return
+	}
+	for _, inst := range h.shell.Instances() {
+		ta, ok := inst.Applet().(*termApplet)
+		if !ok || ta.sess == nil {
+			continue
+		}
+		ta.sess.SetMaxHistoryLines(n)
+	}
 }
 
 // refreshOpenTerminalThemes rebuilds palettes on open terminals after Settings
@@ -2288,7 +2498,7 @@ func (h *host) offerFirstRunSetup() {
 	if n := len(h.tree.Tree().Nodes()); n > 0 {
 		return
 	}
-	msg := "No sessions yet.\n\nImport your SecureCRT folder tree now? Passwords are not imported — use the vault afterward.\n\nYou can also use File → Import SecureCRT later."
+	msg := "No sessions yet.\n\nImport SecureCRT now? You will pick which folder is your customer list; nested folders are kept.\n\nYou can also use File → Import SecureCRT later."
 	dialog.ShowConfirm("First-run setup", msg, func(ok bool) {
 		if !ok {
 			return
@@ -2614,6 +2824,7 @@ func (h *host) refreshVault() {
 		if h.vaultBtn != nil {
 			h.vaultBtn.SetIcon(theme.LoginIcon())
 			h.vaultBtn.SetText("Vault locked")
+			h.vaultBtn.SetToolTip("Vault locked — click to unlock or create")
 		}
 		return
 	}
@@ -2642,6 +2853,7 @@ func (h *host) refreshVault() {
 	if h.vaultBtn != nil {
 		h.vaultBtn.SetIcon(theme.ConfirmIcon())
 		h.vaultBtn.SetText(fmt.Sprintf("Vault %s", filepath.Base(v.Path())))
+		h.vaultBtn.SetToolTip("Credential vault unlocked — click to manage")
 	}
 }
 

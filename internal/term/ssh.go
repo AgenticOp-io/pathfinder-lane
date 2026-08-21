@@ -230,6 +230,21 @@ func (s *Session) Stderr() string {
 	return string(s.stderrBu)
 }
 
+// SSHClient returns the underlying crypto/ssh client while the session is open.
+// SFTP and other subsystems open extra channels on the same connection; they
+// must not Close the returned client — OwnsClient still owns teardown.
+func (s *Session) SSHClient() (*ssh.Client, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.client == nil {
+		return nil, false
+	}
+	return s.client.SSH(), true
+}
+
 // Close ends the session, and the underlying client when OwnsClient was set.
 // It is idempotent.
 func (s *Session) Close() error {

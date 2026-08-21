@@ -105,6 +105,11 @@ type Settings struct {
 	LogDirectory  string `json:"log_directory"`
 	TimestampLogs bool   `json:"timestamp_logs"`
 
+	// CaptureByDefault starts a transcript on every new SSH/telnet session
+	// unless the inventory node already opted in via LogEnabled. Operators
+	// can still toggle capture from the session toolbar or right-click menu.
+	CaptureByDefault bool `json:"capture_by_default"`
+
 	// Anti-idle sends a harmless keystroke after a quiet interval, so a
 	// session is not reaped by an exec-timeout while someone is reading.
 	AntiIdleEnabled     bool   `json:"anti_idle_enabled"`
@@ -128,7 +133,7 @@ func Defaults() Settings {
 		AppTheme:        DefaultAppVariant,
 		TerminalTheme:   DefaultTerminalTheme,
 		FontSize:        12,
-		ScrollbackLines: 1000,
+		ScrollbackLines: 10000,
 		RowOffset:       0,
 		ColOffset:       0,
 		// 25ms is not free — it is a quarter second on a ten-line block —
@@ -166,7 +171,7 @@ func (s Settings) Normalized() Settings {
 	}
 	s.FontSize = ClampTerminalFontSize(s.FontSize)
 	if s.ScrollbackLines <= 0 {
-		s.ScrollbackLines = 1000
+		s.ScrollbackLines = 10000
 	}
 	if s.PasteLineDelayMs < 0 {
 		s.PasteLineDelayMs = 0
