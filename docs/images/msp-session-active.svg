@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720">
+  <defs>
+    <style>
+      .bg { fill: #1a1a1a; }
+      .panel { fill: #252525; }
+      .bar { fill: #2d2d2d; }
+      .term { fill: #0a2463; }
+      .text { fill: #e8e8e8; font-family: Consolas, monospace; font-size: 12px; }
+      .ui { fill: #e8e8e8; font-family: Segoe UI, Arial, sans-serif; font-size: 13px; }
+      .muted { fill: #9a9a9a; font-size: 12px; }
+      .sel { fill: #1e4a7a; }
+      .termtext { fill: #d4e4ff; font-family: Consolas, monospace; font-size: 13px; }
+      .btn { fill: #333; stroke: #555; }
+    </style>
+  </defs>
+  <rect class="bg" width="1200" height="720"/>
+  <rect class="bar" x="0" y="0" width="1200" height="48"/>
+  <text class="ui" x="16" y="30" font-weight="600">PathfinderSSH MSP</text>
+  <rect class="panel" x="0" y="48" width="300" height="672"/>
+  <text class="ui" x="40" y="100">Customers</text>
+  <text class="ui" x="56" y="124">Contoso</text>
+  <text class="ui" x="72" y="148">OOB</text>
+  <rect class="sel" x="64" y="156" width="220" height="22" rx="2"/>
+  <text class="ui" x="96" y="172">core-switch-01</text>
+  <rect class="panel" x="300" y="48" width="900" height="640"/>
+  <rect class="bar" x="300" y="48" width="900" height="32"/>
+  <text class="ui" x="312" y="68">core-switch-01</text>
+  <text class="muted" x="312" y="96">Session  ops@10.10.10.11</text>
+  <rect class="term" x="308" y="104" width="884" height="500" rx="2"/>
+  <text class="termtext" x="320" y="132">Last login: Mon Aug 22 10:15:00 from 192.168.1.50</text>
+  <text class="termtext" x="320" y="156">core-switch-01#</text>
+  <!-- button bar -->
+  <rect class="bar" x="0" y="688" width="1200" height="32"/>
+  <rect class="btn" x="8" y="692" width="72" height="24" rx="3"/>
+  <text class="muted" x="14" y="708">term len 0</text>
+  <rect class="btn" x="84" y="692" width="72" height="24" rx="3"/>
+  <text class="muted" x="98" y="708">show run</text>
+  <rect class="btn" x="160" y="692" width="72" height="24" rx="3"/>
+  <text class="muted" x="172" y="708">show lldp</text>
+  <rect class="btn" x="216" y="692" width="72" height="24" rx="3"/>
+  <text class="muted" x="230" y="708">show cdp</text>
+  <rect class="btn" x="292" y="692" width="56" height="24" rx="3"/>
+  <text class="muted" x="304" y="708">enable</text>
+  <text class="muted" x="1050" y="708">All tabs: off</text>
+</svg>

@@ -71,6 +71,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/cursorapi"
 	"github.com/scottpeterman/pathfinderssh/internal/evidence"
 	helpdoc "github.com/scottpeterman/pathfinderssh/internal/help"
+	"github.com/scottpeterman/pathfinderssh/internal/itglue"
 	"github.com/scottpeterman/pathfinderssh/internal/mapweb"
 	"github.com/scottpeterman/pathfinderssh/internal/mspauth"
 	"github.com/scottpeterman/pathfinderssh/internal/policy"
@@ -99,6 +100,7 @@ func main() {
 		domain       = flag.String("domain", "", "default domain suffix for crawl and capture")
 		verbose      = flag.Bool("v", false, "log applet progress to stderr")
 		doInstall   = flag.Bool("install", false, "copy into LocalAppData\\PathfinderSSH-MSP, create shortcuts, exit")
+		doInstallGUI = flag.Bool("install-gui", false, "graphical install wizard (solo, Microsoft 365, or Google)")
 		doUninstall = flag.Bool("uninstall", false, "remove LocalAppData\\PathfinderSSH-MSP install and shortcuts, exit")
 		doEnroll    = flag.Bool("enroll", false, "open setup wizard (OAuth app registration), then exit if combined with -install")
 		doSetup     = flag.String("setup", "", "access mode: solo (no cloud login), o365, google")
@@ -122,6 +124,13 @@ func main() {
 		return
 	}
 
+	setupMode := strings.TrimSpace(*doSetup)
+
+	if *doInstallGUI {
+		runInstallGUI(setupMode, version)
+		return
+	}
+
 	if err := maybeSelfInstall(*doInstall, *noInstall); err != nil {
 		log.Printf("install: %v", err)
 		if *doInstall {
@@ -129,7 +138,6 @@ func main() {
 		}
 	}
 
-	setupMode := strings.TrimSpace(*doSetup)
 	if setupMode != "" && mspauth.HeadlessSetup(setupMode) {
 		if err := mspauth.SaveSoloSetup(ui.GetAppHome()); err != nil {
 			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
@@ -1947,6 +1955,80 @@ func (h *host) importFromAuvik() {
 	})
 }
 
+func (h *host) importFromITGlue() {
+	if h.vault == nil {
+		dialog.ShowInformation("IT Glue",
+			"Unlock or create the credential vault first (Settings → File → Manage credentials).", h.win)
+		return
+	}
+	cli := itglue.New(h.base.ITGlueAPIKey, h.base.ITGlueBaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if err := cli.Verify(ctx); err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	orgs, err := cli.ListOrganizations(ctx)
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	ui.ShowITGlueImportDialog(h.win, ui.ITGlueImportOptions{
+		Organizations: orgs,
+		OnImport: func(orgID string, imp itglue.ImportDialogOptions) (itglue.ImportResult, error) {
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 180*time.Second)
+			defer cancel2()
+			list, err := cli.ListPasswords(ctx2, orgID)
+			if err != nil {
+				return itglue.ImportResult{}, err
+			}
+			if imp.SSHFilter {
+				list = itglue.FilterSSHPasswords(list)
+			}
+			full, err := cli.FetchPasswordSecrets(ctx2, list)
+			if err != nil {
+				return itglue.ImportResult{}, err
+			}
+			vst, err := itglue.SyncPasswordsToVault(h.vault, full, itglue.VaultSyncOptions{
+				UpdateExisting: imp.UpdateVault,
+			})
+			if err != nil {
+				return itglue.ImportResult{}, err
+			}
+			res := itglue.ImportResult{Vault: vst}
+			if imp.LinkSessions {
+				credNames, err := itglue.CredNamesFromVault(h.vault)
+				if err != nil {
+					res.Errors = append(res.Errors, err.Error())
+				} else {
+					customer := strings.TrimSpace(imp.CustomerName)
+					if customer == "" {
+						for _, o := range orgs {
+							if o.ID == orgID {
+								customer = o.Name
+								break
+							}
+						}
+					}
+					tr := h.tree.Tree()
+					link := itglue.LinkSessions(&tr, full, credNames, itglue.LinkOptions{
+						CustomerName: customer,
+						OnlyEmpty:    imp.OnlyEmptyCreds,
+					})
+					res.Link = link
+					h.tree.SetTree(tr)
+					h.saveTree(tr)
+				}
+			}
+			h.refreshVault()
+			if len(vst.Errors) > 0 {
+				res.Errors = append(res.Errors, vst.Errors...)
+			}
+			return res, nil
+		},
+	})
+}
+
 func (h *host) syncAuvikNow() {
 	h.runAuvikSyncAll(true)
 }
@@ -3587,6 +3669,7 @@ func (h *host) showSettings() {
 		OnSyncCustomers:  h.syncPSACustomers,
 		OnImportAuvik:      h.importFromAuvik,
 		OnSyncAuvik:          h.syncAuvikNow,
+		OnImportITGlue:       h.importFromITGlue,
 		OnHelpQuickstart: func() { ui.ShowHelp(h.win, helpdoc.TopicQuickstart) },
 		OnHelpContents:   func() { ui.ShowHelp(h.win, "") },
 		OnAbout:          h.showAbout,
@@ -3716,6 +3799,31 @@ func (h *host) manageVault() {
 	// toolbar together, so a credential added here is offered by the next
 	// dialog that opens without anything else being told.
 	ui.ShowVaultManager(h.win, h.vault, h.refreshVault)
+}
+
+// runInstallGUI opens the graphical installer (solo / Microsoft 365 / Google).
+func runInstallGUI(setupPreset, ver string) {
+	a := app.NewWithID("com.pathfinder.installer")
+	ui.LoadUserThemes()
+	base, _ := ui.LoadSettings(ui.SettingsPath())
+	ui.SetSettings(base)
+	ui.ApplyAppTheme(a, base.AppVariant())
+	if icon := ui.AppIcon(); icon != nil {
+		a.SetIcon(icon)
+	}
+	w := a.NewWindow("Install PathfinderSSH")
+	w.Resize(fyne.NewSize(640, 520))
+	w.CenterOnScreen()
+
+	home := ui.GetAppHome()
+	auth := mspauth.NewAuthenticator(home)
+	ui.ShowInstallWizard(w, ui.InstallWizardOptions{
+		Version:     ver,
+		PresetSetup: setupPreset,
+		Home:        home,
+		Enroll:      auth.EnrollAndVerify,
+	})
+	w.ShowAndRun()
 }
 
 // maybeSelfInstall copies pathfinder into LocalAppData and relaunches from

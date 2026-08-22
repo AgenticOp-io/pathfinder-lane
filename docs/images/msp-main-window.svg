@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720">
+  <defs>
+    <style>
+      .bg { fill: #1a1a1a; }
+      .panel { fill: #252525; }
+      .bar { fill: #2d2d2d; }
+      .text { fill: #e8e8e8; font-family: Segoe UI, Arial, sans-serif; font-size: 13px; }
+      .muted { fill: #9a9a9a; font-size: 12px; }
+      .icon { fill: #c8c8c8; }
+      .border { stroke: #3a3a3a; stroke-width: 1; fill: none; }
+      .folder { fill: #6b9bd1; }
+    </style>
+  </defs>
+  <rect class="bg" width="1200" height="720"/>
+  <!-- top bar -->
+  <rect class="bar" x="0" y="0" width="1200" height="48"/>
+  <text class="text" x="16" y="30" font-weight="600">PathfinderSSH MSP</text>
+  <text class="muted" x="200" y="30">Connect</text>
+  <text class="muted" x="280" y="30">Crawl</text>
+  <text class="muted" x="350" y="30">Capture</text>
+  <text class="muted" x="430" y="30">Map</text>
+  <text class="muted" x="500" y="30">Search</text>
+  <text class="muted" x="580" y="30">Scripts</text>
+  <text class="muted" x="1080" y="30">Tabs</text>
+  <text class="muted" x="1140" y="30">Settings</text>
+  <!-- sidebar -->
+  <rect class="panel" x="0" y="48" width="280" height="672"/>
+  <rect class="bar" x="8" y="56" width="264" height="28" rx="4"/>
+  <text class="muted" x="16" y="74">Filter by folder/session name (Ctrl+L)</text>
+  <polygon class="folder" points="16,108 20,100 28,100 32,108 40,108 40,120 16,120"/>
+  <text class="text" x="48" y="116">Customers</text>
+  <text class="muted" x="200" y="116">42 sessions</text>
+  <polygon class="folder" points="16,140 20,132 28,132 32,140 40,140 40,152 16,152"/>
+  <text class="text" x="48" y="148">Unassigned</text>
+  <text class="muted" x="200" y="148">18 sessions</text>
+  <!-- main empty area -->
+  <rect class="panel" x="280" y="48" width="920" height="672"/>
+  <text class="muted" x="520" y="360" font-size="14">Nothing open  use Launch</text>
+  <!-- sidebar footer -->
+  <text class="muted" x="16" y="690">60 sessions</text>
+  <rect class="border" x="8" y="656" width="32" height="28" rx="3"/>
+  <rect class="border" x="44" y="656" width="32" height="28" rx="3"/>
+  <rect class="border" x="80" y="656" width="32" height="28" rx="3"/>
+  <rect class="border" x="116" y="656" width="32" height="28" rx="3"/>
+  <rect class="border" x="152" y="656" width="32" height="28" rx="3"/>
+  <rect class="border" x="188" y="656" width="32" height="28" rx="3"/>
+</svg>

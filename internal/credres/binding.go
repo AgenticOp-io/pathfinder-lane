@@ -65,7 +65,7 @@
 // finds no strong match at all and exactly one weak match — the bare-prompt
 // device, where the pre-auth Record and the post-crawl Bind share only the
 // short name. That assumes first labels are unique across domains, which is
-// the assumption tracked in Deferred.md: the symptom to watch for is a record
+// the assumption documented in binding tests: the symptom to watch for is a record
 // whose alias set holds two fully qualified names under different domains.
 package credres
 

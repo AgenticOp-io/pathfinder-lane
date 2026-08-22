@@ -162,6 +162,10 @@ type Settings struct {
 	// Defaults applied to new/merged Auvik sessions without credentials.
 	AuvikDefaultUsername   string `json:"auvik_default_username,omitempty"`
 	AuvikDefaultCredential string `json:"auvik_default_credential,omitempty"`
+
+	// IT Glue API (x-api-key). Env ITGLUE_API_KEY / ITGLUE_BASE_URL override when set.
+	ITGlueAPIKey  string `json:"itglue_api_key,omitempty"`
+	ITGlueBaseURL string `json:"itglue_base_url,omitempty"`
 }
 
 // Defaults returns a usable configuration.

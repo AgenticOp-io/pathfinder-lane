@@ -312,6 +312,9 @@ type Node struct {
 	AuvikDomain    string `yaml:"auvik_domain,omitempty"` // tenant domainPrefix for tunnels
 	AuvikUseTunnel bool   `yaml:"auvik_use_tunnel,omitempty"`
 	AuvikTunnelPort int  `yaml:"auvik_tunnel_port,omitempty"` // preferred local listen port
+
+	// ITGluePasswordID links this session to an IT Glue password for vault sync.
+	ITGluePasswordID string `yaml:"itglue_password_id,omitempty"`
 }
 
 // PasteBaud is the line speed a paste to this session must be paced at, or

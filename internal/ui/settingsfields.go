@@ -95,6 +95,8 @@ type SettingsFields struct {
 	AuvikAutoTunnel   bool
 	AuvikDefUsername  string
 	AuvikDefCred      string
+	ITGlueAPIKey      string
+	ITGlueBaseURL     string
 }
 
 // SettingsFieldsOf renders settings into form values.
@@ -135,6 +137,8 @@ func SettingsFieldsOf(s Settings) SettingsFields {
 		AuvikAutoTunnel:   s.AuvikAutoTunnel,
 		AuvikDefUsername:  s.AuvikDefaultUsername,
 		AuvikDefCred:      s.AuvikDefaultCredential,
+		ITGlueAPIKey:      s.ITGlueAPIKey,
+		ITGlueBaseURL:     s.ITGlueBaseURL,
 	}
 }
 
@@ -251,6 +255,8 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 	out.AuvikAutoTunnel = f.AuvikAutoTunnel
 	out.AuvikDefaultUsername = strings.TrimSpace(f.AuvikDefUsername)
 	out.AuvikDefaultCredential = strings.TrimSpace(f.AuvikDefCred)
+	out.ITGlueAPIKey = strings.TrimSpace(f.ITGlueAPIKey)
+	out.ITGlueBaseURL = strings.TrimSpace(f.ITGlueBaseURL)
 
 	return out.Normalized(), errs
 }

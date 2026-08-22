@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" width="900" height="560">
+  <defs>
+    <style>
+      .bg { fill: #2a2a2a; }
+      .panel { fill: #333; }
+      .text { fill: #e8e8e8; font-family: Segoe UI, Arial, sans-serif; font-size: 13px; }
+      .muted { fill: #9a9a9a; font-size: 12px; }
+      .field { fill: #1e1e1e; stroke: #555; }
+      .tabsel { fill: #1e4a7a; }
+    </style>
+  </defs>
+  <rect class="bg" width="900" height="560" rx="8"/>
+  <text class="text" x="24" y="36" font-size="16" font-weight="600">Settings</text>
+  <rect class="tabsel" x="24" y="52" width="80" height="28" rx="4"/>
+  <text class="text" x="36" y="70">Tools</text>
+  <text class="muted" x="120" y="70">Access</text>
+  <text class="muted" x="200" y="70">Cursor</text>
+  <text class="text" x="24" y="120" font-weight="600">Auvik</text>
+  <text class="muted" x="24" y="142">Tenant API key</text>
+  <rect class="field" x="24" y="150" width="400" height="28" rx="4"/>
+  <text class="text" x="24" y="200" font-weight="600">IT Glue</text>
+  <text class="muted" x="24" y="222">API key</text>
+  <rect class="field" x="24" y="230" width="400" height="28" rx="4"/>
+  <text class="muted" x="24" y="270">Subdomain (e.g. contoso)</text>
+  <rect class="field" x="24" y="278" width="200" height="28" rx="4"/>
+  <text class="muted" x="24" y="330">Import passwords ’ vault; link sessions by hostname</text>
+</svg>

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720">
+  <defs>
+    <style>
+      .bg { fill: #1a1a1a; }
+      .panel { fill: #252525; }
+      .right { fill: #1e1e1e; }
+      .text { fill: #e8e8e8; font-family: Segoe UI, Arial, sans-serif; font-size: 13px; }
+      .muted { fill: #9a9a9a; font-size: 12px; }
+      .term { fill: #0a2463; }
+      .termtext { fill: #d4e4ff; font-family: Consolas, monospace; font-size: 12px; }
+    </style>
+  </defs>
+  <rect class="bg" width="1200" height="720"/>
+  <rect class="panel" x="0" y="48" width="240" height="672"/>
+  <rect class="panel" x="240" y="48" width="640" height="672"/>
+  <rect class="term" x="248" y="100" width="624" height="400"/>
+  <text class="termtext" x="260" y="130">core-switch-01# show interfaces</text>
+  <rect class="right" x="900" y="48" width="300" height="672"/>
+  <text class="text" x="916" y="80" font-weight="600">Cursor AI</text>
+  <text class="muted" x="916" y="110">Troubleshoot this session</text>
+  <text class="muted" x="916" y="140">Ask about config, LLDP neighbors,</text>
+  <text class="muted" x="916" y="158">or paste output for analysis.</text>
+  <rect fill="#333" x="916" y="180" width="268" height="120" rx="4"/>
+  <text class="muted" x="928" y="210">Why is port Eth1/1 down?</text>
+</svg>

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720">
+  <defs>
+    <style>
+      .bg { fill: #1a1a1a; }
+      .panel { fill: #252525; }
+      .bar { fill: #2d2d2d; }
+      .text { fill: #e8e8e8; font-family: Segoe UI, Arial, sans-serif; font-size: 13px; }
+      .muted { fill: #9a9a9a; font-size: 12px; }
+      .sel { fill: #1e4a7a; }
+      .folder { fill: #6b9bd1; }
+      .session { fill: #8ab4f8; }
+    </style>
+  </defs>
+  <rect class="bg" width="1200" height="720"/>
+  <rect class="bar" x="0" y="0" width="1200" height="48"/>
+  <text class="text" x="16" y="30" font-weight="600">PathfinderSSH MSP</text>
+  <rect class="panel" x="0" y="48" width="320" height="672"/>
+  <rect class="bar" x="8" y="56" width="304" height="28" rx="4"/>
+  <text class="muted" x="16" y="74">Filter by folder/session name (Ctrl+L)</text>
+  <!-- tree -->
+  <text class="text" x="40" y="108">Customers</text>
+  <text class="muted" x="220" y="108">42 sessions</text>
+  <text class="text" x="56" y="132">Contoso</text>
+  <text class="text" x="72" y="152">Adtran</text>
+  <text class="text" x="72" y="172">Arista</text>
+  <text class="text" x="72" y="192">OOB</text>
+  <rect class="sel" x="64" y="200" width="240" height="22" rx="2"/>
+  <circle class="session" cx="88" cy="211" r="4"/>
+  <text class="text" x="96" y="216">core-switch-01</text>
+  <text class="text" x="72" y="236">Servers</text>
+  <text class="text" x="56" y="260">Northwind</text>
+  <text class="text" x="56" y="280">Fabrikam</text>
+  <text class="text" x="40" y="304">Unassigned</text>
+  <text class="muted" x="220" y="304">18 sessions</text>
+  <rect class="panel" x="320" y="48" width="880" height="672"/>
+  <text class="muted" x="560" y="360">Select a session and click Launch</text>
+  <text class="muted" x="16" y="690">60 sessions</text>
+</svg>

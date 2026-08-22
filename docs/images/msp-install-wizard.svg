@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" width="640" height="420">
+  <defs>
+    <style>
+      .bg { fill: #2a2a2a; }
+      .card { fill: #333; stroke: #555; }
+      .sel { fill: #1e4a7a; stroke: #4a8fd4; }
+      .text { fill: #e8e8e8; font-family: Segoe UI, Arial, sans-serif; font-size: 14px; }
+      .muted { fill: #9a9a9a; font-size: 12px; }
+      .btn { fill: #0d6efd; }
+    </style>
+  </defs>
+  <rect class="bg" width="640" height="420" rx="8"/>
+  <text class="text" x="32" y="48" font-size="18" font-weight="600">PathfinderSSH MSP Setup</text>
+  <text class="muted" x="32" y="76">How will your team sign in?</text>
+  <rect class="sel" x="32" y="96" width="576" height="56" rx="6"/>
+  <text class="text" x="48" y="128">Solo  no cloud sign-in (local vault only)</text>
+  <rect class="card" x="32" y="164" width="576" height="56" rx="6"/>
+  <text class="text" x="48" y="196">Microsoft 365  Entra ID / OIDC</text>
+  <rect class="card" x="32" y="228" width="576" height="56" rx="6"/>
+  <text class="text" x="48" y="260">Google Workspace  OIDC</text>
+  <rect class="btn" x="480" y="360" width="120" height="36" rx="6"/>
+  <text class="text" x="512" y="382">Install</text>
+</svg>

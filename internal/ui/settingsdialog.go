@@ -73,6 +73,7 @@ type SettingsFormOptions struct {
 	OnSyncCustomers   func()
 	OnImportAuvik     func()
 	OnSyncAuvik       func()
+	OnImportITGlue    func()
 	OnHelpQuickstart  func()
 	OnHelpContents    func()
 	OnAbout           func()
@@ -120,6 +121,9 @@ type SettingsForm struct {
 	auvikAutoTun  *widget.Check
 	auvikDefUser  *widget.Entry
 	auvikDefCred  *widget.Entry
+
+	itglueKey  *widget.Entry
+	itglueBase *widget.Entry
 
 	labelToThemeKey map[string]string
 	themeKeyToLabel map[string]string
@@ -180,6 +184,9 @@ func (f *SettingsForm) SetSettings(s Settings) {
 	f.auvikAutoTun.SetChecked(v.AuvikAutoTunnel)
 	f.auvikDefUser.SetText(v.AuvikDefUsername)
 	f.auvikDefCred.SetText(v.AuvikDefCred)
+
+	f.itglueKey.SetText(v.ITGlueAPIKey)
+	f.itglueBase.SetText(v.ITGlueBaseURL)
 }
 
 // Settings reads the form. It reports false and leaves the status line
@@ -231,6 +238,8 @@ func (f *SettingsForm) read() SettingsFields {
 		AuvikAutoTunnel:     f.auvikAutoTun.Checked,
 		AuvikDefUsername:    f.auvikDefUser.Text,
 		AuvikDefCred:        f.auvikDefCred.Text,
+		ITGlueAPIKey:        f.itglueKey.Text,
+		ITGlueBaseURL:       f.itglueBase.Text,
 	}
 }
 
@@ -291,6 +300,10 @@ func (f *SettingsForm) build() {
 	f.auvikAutoTun = widget.NewCheck("Try AuvikTunnel when direct SSH fails", nil)
 	f.auvikDefUser = entry("Default SSH username for new devices")
 	f.auvikDefCred = entry("Default vault credential name")
+
+	f.itglueKey = entry("ITG.… API key")
+	f.itglueKey.Password = true
+	f.itglueBase = entry("https://api.itglue.com")
 
 	f.status = statusLabel()
 
@@ -425,6 +438,16 @@ func (f *SettingsForm) opsTab() fyne.CanvasObject {
 		),
 		widget.NewLabel("Env AUVIK_USERNAME, AUVIK_API_KEY, AUVIK_BASE_URL, and AUVIK_TUNNEL_BIN\n"+
 			"override these fields when set."),
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle("IT Glue credentials", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("Import username/password records into the vault. API key needs Password Access.\n"+
+			"Use with Auvik inventory: devices from Auvik, credentials from IT Glue."),
+		form(
+			row("API key", f.itglueKey),
+			row("API base URL", f.itglueBase),
+		),
+		widget.NewLabel("Env ITGLUE_API_KEY and ITGLUE_BASE_URL override when set.\n"+
+			"EU: https://api.eu.itglue.com · AU: https://api.au.itglue.com"),
 	))
 }
 
@@ -466,6 +489,14 @@ func (f *SettingsForm) fileTab() fyne.CanvasObject {
 	}
 	if opts.OnSyncAuvik != nil {
 		rows = append(rows, widget.NewButton("Sync all Auvik clients now…", opts.OnSyncAuvik))
+	}
+	if opts.OnImportITGlue != nil {
+		rows = append(rows, widget.NewSeparator(),
+			widget.NewLabelWithStyle("IT Glue", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewLabel("Import passwords into the vault and link SSH sessions under Customers/<org>/.\n"+
+				"Secrets are never logged — only stored in your encrypted vault."),
+			widget.NewButton("Import credentials from IT Glue…", opts.OnImportITGlue),
+		)
 	}
 	if opts.OnSyncCustomers != nil {
 		rows = append(rows, widget.NewSeparator(),
