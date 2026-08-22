@@ -7,10 +7,11 @@ Upstream PathfinderSSH is not an AgenticOps product; this MSP edition is.
 |--|--|
 | **Our repo** | https://github.com/AgenticOp-io/pathfinderssh-msp |
 | **Upstream** | https://github.com/scottpeterman/pathfinderssh |
+| **License** | **GPL-3.0** (same as upstream — see `LICENSE`) |
+
+This is a GPLv3 derivative work. Binaries are free software: recipients get the same freedoms. Source for distributed builds is this repository. Do not relicense as proprietary. Portable fixes may be offered upstream as PRs; do not present this tree as upstream PathfinderSSH.
 
 Built-in **Customers** / **Unassigned** inventory, customer-scoped crawl wizard, drag-and-drop folders, vault password save.
-
-Portable terminal/SSH fixes may be contributed upstream when appropriate; do not present this tree as upstream PathfinderSSH.
 
 ## Build
 

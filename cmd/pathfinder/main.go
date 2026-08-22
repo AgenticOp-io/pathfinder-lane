@@ -2611,6 +2611,9 @@ func (h *host) hostPaths() []ui.AboutDetail {
 		vaultPath = h.vault.Path()
 	}
 	return []ui.AboutDetail{
+		{Label: "License", Value: "GNU GPL v3.0 — free software; you may redistribute under the same terms"},
+		{Label: "Based on", Value: "PathfinderSSH by Scott Peterman (https://github.com/scottpeterman/pathfinderssh)"},
+		{Label: "MSP source", Value: "https://github.com/AgenticOp-io/pathfinderssh-msp"},
 		{Label: "Vault", Value: vaultPath},
 		{Label: "Sessions", Value: h.sessionsPath},
 		{Label: "Captures", Value: h.lastCapture.Params.StorePath},
@@ -2633,7 +2636,7 @@ func flagWasSet(name string) bool {
 func (h *host) showAbout() {
 	ui.ShowAbout(h.win, ui.AboutInfo{
 		Name:    ui.DefaultAppName,
-		Tagline: "crawl, map and capture, from one session tree",
+		Tagline: "MSP fork of PathfinderSSH (GPL-3.0). Upstream by Scott Peterman.",
 		Version: version,
 		Details: h.hostPaths(),
 	})
