@@ -6,8 +6,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 )
 
 // OpsStripOptions wire quick-connect and send-chat into the host.
@@ -29,65 +27,12 @@ const (
 )
 
 // NewOpsStrip builds a compact connect entry plus an armable send line.
+// Prefer NewBottomChrome for the main window; this remains for tests / embeds.
 func NewOpsStrip(opts OpsStripOptions) fyne.CanvasObject {
-	hostEntry := widget.NewEntry()
-	hostEntry.SetPlaceHolder("user@host[:port] — Quick Connect")
-	connectBtn := widget.NewButtonWithIcon("Connect", theme.LoginIcon(), func() {
-		if opts.OnConnect == nil {
-			return
-		}
-		h, u, p := ParseQuickConnect(hostEntry.Text)
-		if h == "" {
-			return
-		}
-		opts.OnConnect(h, u, p)
-	})
-	hostEntry.OnSubmitted = func(string) { connectBtn.OnTapped() }
-
-	chat := widget.NewEntry()
-	chat.SetPlaceHolder("Type and Send — arm All or a customer to fan out")
-
-	modeOpts := []string{"Active", "All tabs"}
-	for _, c := range opts.Customers {
-		c = strings.TrimSpace(c)
-		if c != "" {
-			modeOpts = append(modeOpts, "Customer: "+c)
-		}
-	}
-	mode := widget.NewSelect(modeOpts, nil)
-	mode.SetSelected("Active")
-
-	send := widget.NewButtonWithIcon("Send", theme.MailSendIcon(), func() {
-		if opts.OnSendChat == nil {
-			return
-		}
-		text := chat.Text
-		if text == "" {
-			return
-		}
-		if !strings.HasSuffix(text, "\n") {
-			text += "\n"
-		}
-		m, customer := chatModeFromSelect(mode.Selected)
-		opts.OnSendChat(text, m, customer)
-		chat.SetText("")
-	})
-	chat.OnSubmitted = func(string) { send.OnTapped() }
-
-	connectRow := container.NewBorder(nil, nil, nil, connectBtn, hostEntry)
-	chatRow := container.NewBorder(nil, nil, mode, send, chat)
-	return container.NewVBox(connectRow, chatRow)
-}
-
-func chatModeFromSelect(sel string) (ChatSendMode, string) {
-	switch {
-	case sel == "All tabs":
-		return ChatSendAll, ""
-	case strings.HasPrefix(sel, "Customer:"):
-		return ChatSendCustomer, strings.TrimSpace(strings.TrimPrefix(sel, "Customer:"))
-	default:
-		return ChatSendActive, ""
-	}
+	return container.NewVBox(
+		newConnectPane(opts.OnConnect),
+		newSendPane(opts.Customers, opts.OnSendChat),
+	)
 }
 
 // ParseQuickConnect accepts host, host:port, user@host, user@host:port.

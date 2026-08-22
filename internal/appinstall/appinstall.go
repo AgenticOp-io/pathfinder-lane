@@ -59,6 +59,10 @@ func Ensure() (destExe string, copied bool, err error) {
 		return "", false, err
 	}
 	if SameFile(src, destExe) {
+		// Still refresh LICENSE/NOTICE when already installed.
+		if err := InstallLegalDocs(BinDir()); err != nil {
+			return destExe, false, fmt.Errorf("install legal docs: %w", err)
+		}
 		return destExe, false, nil
 	}
 	if err := os.MkdirAll(BinDir(), 0o755); err != nil {
@@ -92,6 +96,10 @@ func Ensure() (destExe string, copied bool, err error) {
 		if seedNeed {
 			_ = copyFile(srcSeed, dstSeed)
 		}
+	}
+	// Always refresh LICENSE/NOTICE beside the installed exe (GPL attribution).
+	if err := InstallLegalDocs(BinDir()); err != nil {
+		return destExe, copied, fmt.Errorf("install legal docs: %w", err)
 	}
 	return destExe, copied, nil
 }

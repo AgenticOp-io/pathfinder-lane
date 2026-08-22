@@ -30,6 +30,7 @@ func (s *Session) noteOutput(data []byte) {
 		s.recentOut.WriteString(trim[len(trim)-sessionOutRecentCap:])
 	}
 	watchers := append([]*outWatcher(nil), s.outWatch...)
+	tee := s.onOutputTee
 	s.outMu.Unlock()
 	for _, w := range watchers {
 		select {
@@ -37,6 +38,9 @@ func (s *Session) noteOutput(data []byte) {
 		default:
 			// Slow waiter — drop chunk; they still have the rolling buffer start.
 		}
+	}
+	if tee != nil {
+		tee(data)
 	}
 }
 

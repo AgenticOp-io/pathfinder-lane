@@ -1,39 +1,66 @@
 # Pathfinder — Frontend Polish & SecureCRT-Replacement Roadmap
 
-**Status (AgenticOp track):** Phase A–C P0 CRT gaps + MSP ops scaffolding **shipped** on `feature/crt-frontend-roadmap`  
+**Status (AgenticOp track):** CRT P0 + MSP ops gaps largely **shipped** on `feature/crt-frontend-roadmap`  
 
-Work lives on branch `feature/crt-frontend-roadmap` → https://github.com/AgenticOp-io/pathfinderssh-msp  
+Work: https://github.com/AgenticOp-io/pathfinderssh-msp  
 
 ---
 
-## Done in this pass
+## Done
 
 | Item | Where |
 | --- | --- |
-| Persistent button bar (bottom strip + All-tabs arm) | `internal/ui/buttonbar.go` + shell `SetBottom` |
-| Quick Connect + armable Send chat (active / all / customer) | `internal/ui/opsstrip.go` |
-| Keyboard shortcuts Ctrl+W / Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+L | `installShortcuts` |
-| Session tree filter focus (Ctrl+L) | `SessionTree.FocusFilter` |
-| SFTP as DocTabs applet | `KindSFTP` + `NewSFTPView` |
-| Port-forward UI (local / remote / SOCKS5) | `internal/portfwd` + `portfwddialog.go` |
-| Send-to-customer + guarded multi-send | shell `SendToMatching` + Ops menu |
-| Per-customer vault tag hint (`customer:Name`) | vault manager + `sessions.CustomerTag` |
-| Ticket evidence pack (zip scrollbacks) | `internal/evidence` + Session menu |
-| PSA → Customers sync scaffold | `internal/psasync` + Ops menu stub |
-| CRT re-import merge feedback | `applyImport` messaging |
+| Persistent button bar + All-tabs arm | `buttonbar.go` + `SetBottom` |
+| Quick Connect + armable Send chat | `opsstrip.go` |
+| Shortcuts Ctrl+W/Tab/L | `installShortcuts` |
+| SFTP DocTabs applet | `KindSFTP` + `NewSFTPView` |
+| Port forwards L/R/SOCKS5 | `internal/portfwd` |
+| Send-to-customer + guarded multi-send | shell + Ops menu |
+| Ticket evidence pack | `internal/evidence` |
+| Script recorder → YAML | `scripts.Recorder` + Session menu |
+| Python session scripts (`crt.Screen`) | `internal/pyrun` |
+| Tile / untile terminals | `Shell.ToggleTileLayout` |
+| Windows OpenSSH agent named pipe | `sshcore/agent_windows.go` + go-winio |
+| Read-only + change window | Settings → Ops + `internal/policy` |
+| Crawl confidence column + map field | `crawlrun.Confidence`, `topo.NodeDetails` |
+| PSA JSON file sync | `psasync.FileSource` + `psa-customers.json` |
+| Cursor account / Cloud Agents API | `internal/cursorapi` |
+| Troubleshoot addon (gated) | Settings → Ops enable; Ops / toolbar → Troubleshoot agent modal |
 
-| SecureCRT importer / CSV / nested folders / maps / vault | earlier on this branch |
+## Still open / polish
 
-## Still open
+- Live ConnectWise / Autotask / Halo SDKs (JSON file adapter is the shipped integration point)
+- Auvik: optional AuvikTunnel CLI bridge for collector-only sites (no REST terminal API)
+- Cursor Admin / Analytics enterprise endpoints (models list + Cloud Agents shipped)
 
-- Script recorder + Python scripting
-- Tiled multi-session layout
-- Windows SSH agent named pipe
-- Real PSA adapters (ConnectWise / Autotask / …)
-- Read-only / change-window policy engine beyond guarded send
-- Crawl confidence scoring UI
-- Recent strip UI in the tree panel
+## Auvik (inventory sync)
+
+| Capability | Status |
+| --- | --- |
+| API auth + list tenants/devices | `internal/auvik` |
+| Import/sync IPs → `Customers/<client>/Auvik/` | Settings → File → Import / Sync |
+| Merge existing sessions (Auvik authority for IPs) | `auvik.SyncTenantTree` |
+| Periodic sync all clients | Settings → Tools → Periodic Auvik sync |
+| AuvikTunnel on unreachable SSH | Settings → Tools → Auto tunnel + `AuvikTunnel` binary |
+| Device SSH passwords from Auvik | **Not available** — API has no login-credential export |
+| Headless SSH via Auvik API | **Not available** — Pathfinder SSH or local AuvikTunnel |
+
+
+## Just landed (this pass)
+
+| Item | Where |
+| --- | --- |
+| Tiled terminal focus ring + title strip | `tilecell.go` + `Shell.activateTile` |
+| Ctrl+Tab cycles active tile when tiled | `Shell.cycleTile` |
+| Cursor cloud model picker | `cursoraccountdialog` + `ListModels` |
+
+## Previously landed
+
+| Item | Where |
+| --- | --- |
+| Script recorder wait_for auto-detect | `scripts.Recorder.NoteOutput` + session `SetOnOutputTee` |
+| Map confidence labels + border tiers | `mapweb` viewer.js / app.js |
+| Troubleshoot script auto-suggest | `scripts.RankNames` + troubleshoot modal Refresh |
+| CRT Green / Amber phosphor labels | `themes/crt-green.yaml`, `crt-amber.yaml` |
 
 ---
-
-(Original roadmap body follows for reference.)

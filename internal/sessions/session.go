@@ -302,6 +302,16 @@ type Node struct {
 	Model      string `yaml:"model,omitempty"`
 	DeviceType string `yaml:"device_type,omitempty"`
 	Notes      string `yaml:"notes,omitempty"`
+
+	// --- Auvik inventory sync ---
+	//
+	// When set, periodic Auvik sync matches on AuvikDeviceID and updates Host
+	// from inventory (Auvik is authority for management addresses).
+	AuvikDeviceID  string `yaml:"auvik_device_id,omitempty"`
+	AuvikTenantID  string `yaml:"auvik_tenant_id,omitempty"`
+	AuvikDomain    string `yaml:"auvik_domain,omitempty"` // tenant domainPrefix for tunnels
+	AuvikUseTunnel bool   `yaml:"auvik_use_tunnel,omitempty"`
+	AuvikTunnelPort int  `yaml:"auvik_tunnel_port,omitempty"` // preferred local listen port
 }
 
 // PasteBaud is the line speed a paste to this session must be paced at, or

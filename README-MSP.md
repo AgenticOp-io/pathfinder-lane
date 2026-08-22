@@ -11,6 +11,13 @@ Upstream PathfinderSSH is not an AgenticOps product; this MSP edition is.
 
 This is a GPLv3 derivative work. Binaries are free software: recipients get the same freedoms. Source for distributed builds is this repository. Do not relicense as proprietary. Portable fixes may be offered upstream as PRs; do not present this tree as upstream PathfinderSSH.
 
+Security reporting and the non-negotiable stance: [`SECURITY.md`](SECURITY.md). Installed AppData copies include `LICENSE` and `NOTICE` beside `pathfinder.exe`.
+
+**Install (easy):** `products/pathfinder-msp/Install.ps1` — pick **Solo**, **Microsoft 365**, or **Google**.  
+Quick guide: [`docs/SETUP-QUICK.md`](docs/SETUP-QUICK.md). Deep planning: [`docs/MSP-INSTALL-AND-ACCESS.md`](docs/MSP-INSTALL-AND-ACCESS.md).
+
+**Sign-in:** Solo needs no cloud login. Microsoft/Google use OIDC in the system browser. CLI: `pathfinder -setup solo|o365|google` or `pathfinder -install -setup solo`.
+
 Built-in **Customers** / **Unassigned** inventory, customer-scoped crawl wizard, drag-and-drop folders, vault password save.
 
 ## Build

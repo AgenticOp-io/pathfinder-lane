@@ -60,8 +60,9 @@ type PeerEntry struct {
 }
 
 type NodeDetails struct {
-	IP       string `json:"ip"`
-	Platform string `json:"platform"`
+	IP         string `json:"ip"`
+	Platform   string `json:"platform"`
+	Confidence int    `json:"confidence,omitempty"`
 }
 
 type MapNode struct {
@@ -190,8 +191,12 @@ func Generate(devices []*Device, opt Options) map[string]MapNode {
 			continue
 		}
 		node := MapNode{
-			NodeDetails: NodeDetails{IP: d.IPAddress, Platform: d.Platform},
-			Peers:       map[string]PeerEntry{},
+			NodeDetails: NodeDetails{
+				IP:         d.IPAddress,
+				Platform:   d.Platform,
+				Confidence: deviceConfidence(d),
+			},
+			Peers: map[string]PeerEntry{},
 		}
 		for key, claims := range allClaims {
 			if key[0] != dc {
@@ -296,3 +301,31 @@ func interfaceLike(s string) bool {
 	}
 	return false
 }
+
+// deviceConfidence scores a crawled device for map side-panels (0–100).
+func deviceConfidence(d *Device) int {
+	if d == nil {
+		return 0
+	}
+	score := 70
+	plat := strings.ToLower(strings.TrimSpace(d.Platform))
+	if plat == "" || plat == "unknown" {
+		score -= 15
+	} else {
+		score += 10
+	}
+	if len(d.Neighbors) > 0 {
+		score += 10
+	}
+	if d.Failed {
+		score = 20
+	}
+	if score > 100 {
+		score = 100
+	}
+	if score < 0 {
+		score = 0
+	}
+	return score
+}
+

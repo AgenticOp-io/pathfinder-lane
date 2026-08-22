@@ -16,11 +16,14 @@ import (
 
 const FileName = "buttons.yaml"
 
-// Button is one toolbar action.
+// Button is one toolbar action — send literal text or run a named script.
 type Button struct {
 	Label string `yaml:"label"`
-	// Send is the literal text pushed to the session. Use \n for Return.
-	Send string `yaml:"send"`
+	// Send is literal text pushed to the session. In YAML, write \n for Enter;
+	// at send time it is converted to CR to match the terminal's Return key.
+	Send string `yaml:"send,omitempty"`
+	// Script is the name of a script in scripts.yaml to run on click.
+	Script string `yaml:"script,omitempty"`
 	// Scope is "active" (default) or "all" SSH tabs.
 	Scope string `yaml:"scope,omitempty"`
 }
@@ -74,6 +77,7 @@ func Load(path string) (File, error) {
 			f.Buttons[i].Scope = "active"
 		}
 		f.Buttons[i].Send = unescape(f.Buttons[i].Send)
+		f.Buttons[i].Script = strings.TrimSpace(f.Buttons[i].Script)
 	}
 	return f, nil
 }

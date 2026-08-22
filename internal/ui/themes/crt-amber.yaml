@@ -1,6 +1,6 @@
 # Converted from nterm-js themes.js
 name: "crt-amber"
-label: "Crt-amber"
+label: "CRT Amber (phosphor)"
 type: "dark"
 terminal:
   background: "#000000"

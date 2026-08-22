@@ -132,6 +132,36 @@ type Settings struct {
 
 	// SftpShowHome adds a Home button on the SFTP dialog (login directory).
 	SftpShowHome bool `json:"sftp_show_home,omitempty"`
+
+	// ReadOnlyMode blocks typing and scripted/button sends (anti-idle still works).
+	ReadOnlyMode bool `json:"read_only_mode,omitempty"`
+	// ChangeWindowStart/End are local HH:MM; empty disables the window.
+	ChangeWindowStart string `json:"change_window_start,omitempty"`
+	ChangeWindowEnd   string `json:"change_window_end,omitempty"`
+
+	// CursorAPIKey is optional; CURSOR_API_KEY env wins when this is empty.
+	// Prefer env in CI; the settings field is for interactive MSP boxes.
+	CursorAPIKey string `json:"cursor_api_key,omitempty"`
+
+	// TroubleshootAddon enables Ops → Troubleshoot agent (gather, scripts, Cursor).
+	TroubleshootAddon bool `json:"troubleshoot_addon,omitempty"`
+
+	// Auvik inventory API. Env AUVIK_* overrides when set.
+	AuvikUsername string `json:"auvik_username,omitempty"`
+	AuvikAPIKey   string `json:"auvik_api_key,omitempty"`
+	AuvikBaseURL  string `json:"auvik_base_url,omitempty"`
+
+	// AuvikSyncEnabled runs periodic inventory sync for all Auvik tenants.
+	AuvikSyncEnabled bool `json:"auvik_sync_enabled,omitempty"`
+	// AuvikSyncIntervalMin is minutes between sync passes (default 60).
+	AuvikSyncIntervalMin int `json:"auvik_sync_interval_min,omitempty"`
+	// AuvikTunnelPath is the AuvikTunnel binary (env AUVIK_TUNNEL_BIN wins).
+	AuvikTunnelPath string `json:"auvik_tunnel_path,omitempty"`
+	// AuvikAutoTunnel tries AuvikTunnel when direct SSH is unreachable.
+	AuvikAutoTunnel bool `json:"auvik_auto_tunnel,omitempty"`
+	// Defaults applied to new/merged Auvik sessions without credentials.
+	AuvikDefaultUsername   string `json:"auvik_default_username,omitempty"`
+	AuvikDefaultCredential string `json:"auvik_default_credential,omitempty"`
 }
 
 // Defaults returns a usable configuration.
@@ -201,6 +231,12 @@ func (s Settings) Normalized() Settings {
 		s.AntiIdleKeystroke = antiIdleDefaultKeystroke
 	}
 	s.TreeExpandStyle = s.TreeExpandStyle.Normalize()
+	if s.AuvikSyncEnabled && s.AuvikSyncIntervalMin <= 0 {
+		s.AuvikSyncIntervalMin = 60
+	}
+	if s.AuvikSyncIntervalMin < 0 {
+		s.AuvikSyncIntervalMin = 0
+	}
 	return s
 }
 

@@ -80,6 +80,21 @@ type SettingsFields struct {
 
 	TreeExpandStyle string
 	SftpShowHome    bool
+
+	ReadOnlyMode      bool
+	ChangeWindowStart string
+	ChangeWindowEnd   string
+	CursorAPIKey      string
+	TroubleshootAddon bool
+	AuvikUsername     string
+	AuvikAPIKey       string
+	AuvikBaseURL      string
+	AuvikSyncEnabled  bool
+	AuvikSyncInterval string
+	AuvikTunnelPath   string
+	AuvikAutoTunnel   bool
+	AuvikDefUsername  string
+	AuvikDefCred      string
 }
 
 // SettingsFieldsOf renders settings into form values.
@@ -105,6 +120,21 @@ func SettingsFieldsOf(s Settings) SettingsFields {
 
 		TreeExpandStyle: s.TreeExpandStyle.Normalize().Label(),
 		SftpShowHome:    s.SftpShowHome,
+
+		ReadOnlyMode:      s.ReadOnlyMode,
+		ChangeWindowStart: s.ChangeWindowStart,
+		ChangeWindowEnd:   s.ChangeWindowEnd,
+		CursorAPIKey:      s.CursorAPIKey,
+		TroubleshootAddon: s.TroubleshootAddon,
+		AuvikUsername:     s.AuvikUsername,
+		AuvikAPIKey:       s.AuvikAPIKey,
+		AuvikBaseURL:      s.AuvikBaseURL,
+		AuvikSyncEnabled:  s.AuvikSyncEnabled,
+		AuvikSyncInterval: strconv.Itoa(s.AuvikSyncIntervalMin),
+		AuvikTunnelPath:   s.AuvikTunnelPath,
+		AuvikAutoTunnel:   s.AuvikAutoTunnel,
+		AuvikDefUsername:  s.AuvikDefaultUsername,
+		AuvikDefCred:      s.AuvikDefaultCredential,
 	}
 }
 
@@ -203,6 +233,24 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 		out.TreeExpandStyle = TreeExpandStyleFromLabel(v)
 	}
 	out.SftpShowHome = f.SftpShowHome
+	out.ReadOnlyMode = f.ReadOnlyMode
+	out.ChangeWindowStart = strings.TrimSpace(f.ChangeWindowStart)
+	out.ChangeWindowEnd = strings.TrimSpace(f.ChangeWindowEnd)
+	out.CursorAPIKey = strings.TrimSpace(f.CursorAPIKey)
+	out.TroubleshootAddon = f.TroubleshootAddon
+	out.AuvikUsername = strings.TrimSpace(f.AuvikUsername)
+	out.AuvikAPIKey = strings.TrimSpace(f.AuvikAPIKey)
+	out.AuvikBaseURL = strings.TrimSpace(f.AuvikBaseURL)
+	out.AuvikSyncEnabled = f.AuvikSyncEnabled
+	if n, err := settingsInt("Auvik sync interval", f.AuvikSyncInterval, 5, 1440); err != nil {
+		errs = appendErr(errs, err)
+	} else if n != nil {
+		out.AuvikSyncIntervalMin = *n
+	}
+	out.AuvikTunnelPath = ExpandHome(f.AuvikTunnelPath)
+	out.AuvikAutoTunnel = f.AuvikAutoTunnel
+	out.AuvikDefaultUsername = strings.TrimSpace(f.AuvikDefUsername)
+	out.AuvikDefaultCredential = strings.TrimSpace(f.AuvikDefCred)
 
 	return out.Normalized(), errs
 }

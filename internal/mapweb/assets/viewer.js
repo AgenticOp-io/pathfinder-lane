@@ -313,7 +313,7 @@ class TopologyViewer {
           'text-background-padding': '3px',
           'text-background-shape': 'roundrectangle',
           'border-width': 2,
-          'border-color': 'data(vendorColor)',
+          'border-color': 'data(borderColor)',
           'border-opacity': 0.8,
         },
       },
@@ -330,6 +330,19 @@ class TopologyViewer {
           'border-opacity': 0.8,
           'opacity': 0.6,
         },
+      },
+      {
+        // Low crawl confidence: soft amber border (overrides vendor when set).
+        selector: 'node[confidence > 0][confidence < 50]',
+        style: { 'border-color': '#d9822b', 'border-opacity': 0.95 },
+      },
+      {
+        selector: 'node[confidence >= 50][confidence < 80]',
+        style: { 'border-color': '#2d72d2', 'border-opacity': 0.95 },
+      },
+      {
+        selector: 'node[confidence >= 80]',
+        style: { 'border-color': '#238551', 'border-opacity': 0.95 },
       },
       {
         selector: 'node:selected',
@@ -450,18 +463,22 @@ class TopologyViewer {
     for (const [deviceName, deviceData] of Object.entries(data)) {
       const details = deviceData.node_details || {};
       nodeIds.add(deviceName);
+      const conf = Number(details.confidence) || 0;
+      const label = conf > 0 ? `${deviceName} · ${Math.round(conf)}%` : deviceName;
 
       elements.push({
         group: 'nodes',
         data: {
           id: deviceName,
-          label: deviceName,
+          label: label,
           ip: details.ip || '',
           platform: details.platform || 'Unknown',
+          confidence: conf,
           icon: this._getIconForPlatform(details.platform, deviceName),
           discovered: true,
           vendorColor: this._getVendorColor(details.platform, deviceName),
           vendorFill: this._getVendorFill(details.platform, deviceName),
+          borderColor: this._getVendorColor(details.platform, deviceName),
         },
       });
     }
@@ -800,6 +817,7 @@ class TopologyViewer {
       label: n.data('label'),
       ip: n.data('ip'),
       platform: n.data('platform'),
+      confidence: n.data('confidence') || 0,
       vendor: this._detectVendor(n.data('platform'), n.id()),
       discovered: n.data('discovered'),
     })).sort((a, b) => a.label.localeCompare(b.label));

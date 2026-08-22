@@ -139,6 +139,14 @@
       item.appendChild(dot);
       item.appendChild(name);
 
+      if (d.confidence && Number(d.confidence) > 0) {
+        var conf = document.createElement('span');
+        conf.className = 'device-vendor';
+        conf.textContent = Math.round(Number(d.confidence)) + '%';
+        conf.title = 'Crawl confidence';
+        item.appendChild(conf);
+      }
+
       if (d.vendor !== 'default') {
         var v = document.createElement('span');
         v.className = 'device-vendor';
@@ -224,6 +232,13 @@
 
     content.appendChild(kv('IP', data.ip));
     content.appendChild(kv('Platform', data.platform));
+    if (data.confidence != null && data.confidence !== '' && Number(data.confidence) > 0) {
+      var conf = Number(data.confidence);
+      content.appendChild(kv('Confidence', conf + '%'));
+      var confCls = conf >= 80 ? 'tag-green' : (conf >= 50 ? 'tag-blue' : 'tag-red');
+      tags.appendChild(document.createTextNode(' '));
+      tags.appendChild(tag('conf ' + conf, confCls));
+    }
 
     var id = nodeIDs[data.id];
     if (canConnect && id) {

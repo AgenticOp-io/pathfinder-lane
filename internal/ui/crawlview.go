@@ -51,16 +51,17 @@ var crawlColumns = []struct {
 	key   string
 	width float32
 }{
-	{"Device", "name", 220},
-	{"Depth", "depth", 60},
-	{"Platform", "platform", 120},
-	{"State", "state", 100},
-	{"Cred", "cred", 140},
-	{"Try", "attempts", 50},
-	{"Nbrs", "neighbors", 60},
-	{"Via", "via", 150},
-	{"Time", "duration", 70},
-	{"Detail", "detail", 320},
+	{"Device", "name", 200},
+	{"Depth", "depth", 50},
+	{"Platform", "platform", 110},
+	{"Conf", "confidence", 50},
+	{"State", "state", 90},
+	{"Cred", "cred", 130},
+	{"Try", "attempts", 45},
+	{"Nbrs", "neighbors", 50},
+	{"Via", "via", 140},
+	{"Time", "duration", 65},
+	{"Detail", "detail", 300},
 }
 
 // CrawlView renders a run. Construct it once and hand its Emit to the crawler.
@@ -325,11 +326,13 @@ func (v *CrawlView) updateCell(id widget.TableCellID, o fyne.CanvasObject) {
 	case 2:
 		l.SetText(row.Platform)
 	case 3:
+		l.SetText(fmt.Sprint(row.Confidence()))
+	case 4:
 		l.SetText(row.State.String())
 		// Not dialed is not a failure and must not read like one, or the
 		// distinction the counters draw gets undone by the styling.
 		l.TextStyle = fyne.TextStyle{Italic: row.State == crawlrun.StateNotDialed}
-	case 4:
+	case 5:
 		if row.Credential == "" {
 			l.SetText("")
 		} else if row.CredReason != "" && row.CredReason != "pinned" {
@@ -337,7 +340,7 @@ func (v *CrawlView) updateCell(id widget.TableCellID, o fyne.CanvasObject) {
 		} else {
 			l.SetText(row.Credential)
 		}
-	case 5:
+	case 6:
 		if row.Attempts > 1 {
 			// More than one rung means failed authentications were spent.
 			l.SetText(fmt.Sprintf("%d !", row.Attempts))
@@ -347,23 +350,23 @@ func (v *CrawlView) updateCell(id widget.TableCellID, o fyne.CanvasObject) {
 		} else {
 			l.SetText("")
 		}
-	case 6:
+	case 7:
 		if row.Neighbors == 0 {
 			l.SetText("")
 		} else {
 			l.SetText(fmt.Sprintf("%d/%d", row.New, row.Neighbors))
 		}
-	case 7:
+	case 8:
 		// Blank for a seed, which is the honest answer: nothing reported it,
 		// you did.
 		l.SetText(row.Via)
-	case 8:
+	case 9:
 		if d := row.Duration(); d > 0 {
 			l.SetText(d.Round(100 * time.Millisecond).String())
 		} else {
 			l.SetText("")
 		}
-	case 9:
+	case 10:
 		l.SetText(row.Detail)
 	}
 }

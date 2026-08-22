@@ -1,0 +1,18 @@
+PathfinderSSH MSP
+=================
+
+This program is a modified version of PathfinderSSH.
+
+  Upstream author: Scott Peterman
+  Upstream project: https://github.com/scottpeterman/pathfinderssh
+  Upstream license: GNU General Public License v3.0 (GPL-3.0)
+
+  MSP edition: AgenticOp-io / AgenticOps
+  MSP source: https://github.com/AgenticOp-io/pathfinderssh-msp
+
+The complete corresponding source for any binary we distribute is available
+from the MSP repository above under the same GPL-3.0 terms. See the file
+LICENSE in this tree for the full license text.
+
+Copyright notices from upstream and from subsequent contributors remain in
+force. This NOTICE file is informational and does not modify the GPL.
