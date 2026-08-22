@@ -116,6 +116,18 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 		refresh()
 	}
 
+	homeDir := "/"
+	if wd, err := cli.Getwd(); err == nil && strings.TrimSpace(wd) != "" {
+		homeDir = wd
+	}
+	if rp, err := cli.RealPath("~"); err == nil && strings.TrimSpace(rp) != "" {
+		homeDir = rp
+	}
+	goHome := func() {
+		pathEntry.SetText(homeDir)
+		refresh()
+	}
+
 	pathEntry.OnSubmitted = func(string) { refresh() }
 
 	var downloadSel func()
@@ -247,8 +259,15 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 		}, w)
 	}
 
-	toolbar := container.NewHBox(
-		widget.NewButtonWithIcon("Up", theme.NavigateBackIcon(), goUp),
+	cfg := LoadSftpNavSettings()
+	upBtn := widget.NewButtonWithIcon("Up", theme.MoveUpIcon(), goUp)
+	tools := []fyne.CanvasObject{upBtn}
+	if cfg.SftpShowHome {
+		tools = append([]fyne.CanvasObject{
+			widget.NewButtonWithIcon("Home", theme.HomeIcon(), goHome),
+		}, tools...)
+	}
+	tools = append(tools,
 		widget.NewButtonWithIcon("Open", theme.FolderOpenIcon(), openSel),
 		widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), refresh),
 		widget.NewButtonWithIcon("Upload…", theme.UploadIcon(), uploadFile),
@@ -256,6 +275,7 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 		widget.NewButtonWithIcon("New folder…", theme.FolderNewIcon(), mkdir),
 		widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), removeSel),
 	)
+	toolbar := container.NewHBox(tools...)
 
 	body := container.NewBorder(
 		container.NewBorder(nil, nil, widget.NewLabel("Remote"), nil, pathEntry),

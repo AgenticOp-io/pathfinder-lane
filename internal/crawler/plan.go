@@ -58,12 +58,13 @@ var plans = map[string][]step{
 		{Command: "show lldp neighbors detail", Key: "lldp_detail", Protocol: "lldp", BestEffort: true, EdgeSource: true},
 	},
 	"juniper_junos": {
-		// detail first: it carries System Description (pre-dial exclusion
-		// depends on it) and in-device dedup keeps the first record per
-		// edge. Old Junos rejects detail (best-effort); terse then still
-		// provides the edges, just without descriptions.
 		{Command: "show lldp neighbors detail", Key: "lldp_detail", Protocol: "lldp", BestEffort: true, EdgeSource: true},
 		{Command: "show lldp neighbors", Key: "lldp", Protocol: "lldp", EdgeSource: true},
+	},
+	// RouterOS discovery table (not LLDP TextFSM — parsed in mikrotik.go).
+	"mikrotik_routeros": {
+		{Command: "/ip neighbor print detail without-paging", Key: "mikrotik_neighbor", Protocol: "discovery", BestEffort: true, EdgeSource: true},
+		{Command: "/ip neighbor print detail", Key: "mikrotik_neighbor", Protocol: "discovery", BestEffort: true, EdgeSource: true},
 	},
 }
 

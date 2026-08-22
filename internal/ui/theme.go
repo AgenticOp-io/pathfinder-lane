@@ -121,6 +121,12 @@ func (t *NativeTheme) Size(name fyne.ThemeSizeName) float32 {
 }
 
 func (t *NativeTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
+	// Session tree branch controls call theme.NavigateNextIcon / MoveDownIcon,
+	// which resolve through the app theme. Remap those two names from the
+	// TreeExpandStyle setting so the inventory can look like Explorer.
+	if r := treeBranchIcon(CurrentSettings().TreeExpandStyle, name); r != nil {
+		return r
+	}
 	return theme.DefaultTheme().Icon(name)
 }
 

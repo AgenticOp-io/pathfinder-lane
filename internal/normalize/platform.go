@@ -38,6 +38,9 @@ var platformPatterns = []struct {
 	{"cisco_ios", regexp.MustCompile(`(?i)Cisco IOS`)},
 	{"cisco_asa", regexp.MustCompile(`(?i)Adaptive Security Appliance`)},
 	{"juniper_junos", regexp.MustCompile(`(?i)\bJunos\b|\bJuniper\b`)},
+	{"mikrotik_routeros", regexp.MustCompile(`(?i)MikroTik|RouterOS`)},
+	{"proxmox", regexp.MustCompile(`(?i)Proxmox`)},
+	{"vmware_esxi", regexp.MustCompile(`(?i)VMware ESXi|VMkernel`)},
 	{"linux", regexp.MustCompile(`(?i)\bLinux\b`)},
 }
 

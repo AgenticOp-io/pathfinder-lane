@@ -36,6 +36,9 @@ type CrawlWizardOptions struct {
 	CustomersRoot  string
 	HomeDir        string
 	CreateCustomer func(name string) (string, error) // returns folder path
+	// PrefillCustomer / PrefillSeedHosts come from the CSV import wizard.
+	PrefillCustomer  string
+	PrefillSeedHosts []string
 }
 
 // ShowCrawlWizard walks the operator through a customer-scoped crawl.
@@ -54,8 +57,11 @@ func ShowCrawlWizard(w fyne.Window, opts CrawlWizardOptions, onRun func(CrawlLau
 	}
 
 	customers := append([]string(nil), opts.Customers...)
-	selectedCustomer := ""
-	if prev.MapPath != "" {
+	selectedCustomer := strings.TrimSpace(opts.PrefillCustomer)
+	if selectedCustomer != "" {
+		customers = appendUnique(customers, selectedCustomer)
+	}
+	if selectedCustomer == "" && prev.MapPath != "" {
 		// Best-effort: last map under …/maps/<customer>/…
 		parts := strings.Split(filepath.ToSlash(prev.MapPath), "/")
 		for i, part := range parts {
@@ -155,6 +161,9 @@ func ShowCrawlWizard(w fyne.Window, opts CrawlWizardOptions, onRun func(CrawlLau
 	// --- step 1: starting devices -----------------------------------------
 	sessionChecks := widget.NewCheckGroup(nil, nil)
 	extraSeeds := multiline("optional: more hosts, one per line")
+	if len(opts.PrefillSeedHosts) > 0 {
+		extraSeeds.SetText(strings.Join(opts.PrefillSeedHosts, "\n"))
+	}
 	selectAll := widget.NewButton("Select all for this customer", nil)
 	selectNone := widget.NewButton("Clear", func() { sessionChecks.SetSelected(nil) })
 	hostByLabel := map[string]string{}
@@ -249,14 +258,26 @@ func ShowCrawlWizard(w fyne.Window, opts CrawlWizardOptions, onRun func(CrawlLau
 	)
 
 	setMapDefault := func(customer string) {
-		if opts.HomeDir == "" || customer == "" {
+		customer = strings.TrimSpace(customer)
+		if customer == "" {
 			return
 		}
-		safe := sanitizePathSegment(customer)
-		def := filepath.Join(opts.HomeDir, "maps", safe, time.Now().Format("crawl-2006-01-02.json"))
-		if strings.TrimSpace(mapPath.Text) == "" || strings.Contains(mapPath.Text, string(filepath.Separator)+"maps"+string(filepath.Separator)) {
+		home := strings.TrimSpace(opts.HomeDir)
+		if home == "" {
+			home = GetAppHome()
+		}
+		safe := SanitizePathSegment(customer)
+		def := filepath.Join(home, "maps", safe, time.Now().Format("crawl-2006-01-02.json"))
+		cur := strings.TrimSpace(mapPath.Text)
+		// Always (re)fill when blank or still pointing at a per-customer maps tree,
+		// so Start never runs with an empty MapPath after the customer was chosen.
+		if cur == "" || strings.Contains(filepath.ToSlash(cur), "/maps/") {
 			mapPath.SetText(def)
 		}
+	}
+
+	if selectedCustomer != "" {
+		setMapDefault(selectedCustomer)
 	}
 
 	pages := []fyne.CanvasObject{page0, page1, page2, page3, page4}
@@ -387,7 +408,11 @@ func ShowCrawlWizard(w fyne.Window, opts CrawlWizardOptions, onRun func(CrawlLau
 				return
 			}
 			selectedCustomer = name
-			setMapDefault(selectedCustomer)
+		}
+		setMapDefault(selectedCustomer)
+		if strings.TrimSpace(mapPath.Text) == "" {
+			status.SetText("⚠  map file path is empty — pick a customer again or type a path on the last step")
+			return
 		}
 		out, msgs := buildLaunch(selectedCustomer)
 		if len(msgs) > 0 {
@@ -446,12 +471,6 @@ func appendUnique(list []string, name string) []string {
 		}
 	}
 	return append(list, name)
-}
-
-func sanitizePathSegment(s string) string {
-	s = strings.TrimSpace(s)
-	repl := strings.NewReplacer(`/`, `_`, `\`, `_`, `:`, `_`, `*`, `_`, `?`, `_`, `"`, `_`, `<`, `_`, `>`, `_`, `|`, `_`)
-	return repl.Replace(s)
 }
 
 func depthChoiceFor(d int) string {

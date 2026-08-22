@@ -167,7 +167,7 @@ func Connect(ctx context.Context, n sessions.Node, o Options) (term.Transport, e
 
 	select {
 	case r := <-done:
-		return r.tp, r.err
+		return r.tp, Humanize(r.err)
 	case <-ctx.Done():
 		go func() {
 			r := <-done
@@ -176,7 +176,7 @@ func Connect(ctx context.Context, n sessions.Node, o Options) (term.Transport, e
 				_ = r.tp.Close()
 			}
 		}()
-		return nil, fmt.Errorf("connect %s: %w", n.Target(), ctx.Err())
+		return nil, Humanize(fmt.Errorf("connect %s: %w", n.Target(), ctx.Err()))
 	}
 }
 

@@ -219,6 +219,15 @@ func (t *SessionTree) build() {
 	t.refresh()
 }
 
+// RefreshView redraws the inventory from the current tree and filter.
+// Call after theme/icon settings change so branch expand glyphs update.
+func (t *SessionTree) RefreshView() {
+	if t == nil {
+		return
+	}
+	t.refresh()
+}
+
 // scheduleFilterRefresh rebuilds the view after typing pauses. Fyne's Tree
 // Refresh walks every open node; doing that per keystroke freezes large trees.
 func (t *SessionTree) scheduleFilterRefresh() {
@@ -398,6 +407,10 @@ func (t *SessionTree) newCustomer() {
 			if _, err := t.tree.CreateCustomer(product.CustomersRoot, entry.Text); err != nil {
 				t.error(err)
 				return
+			}
+			if _, err := EnsureCustomerMapsDir(GetAppHome(), entry.Text); err != nil {
+				// Session folder still exists; maps dir can be created on first crawl.
+				t.status.SetText("Customer created; maps folder: " + err.Error())
 			}
 			t.changed()
 			t.status.SetText("Customer created under " + product.CustomersRoot)

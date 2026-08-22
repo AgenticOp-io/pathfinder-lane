@@ -427,15 +427,34 @@
     el('btnZoomOut').addEventListener('click', function () { viewer.zoomOut(); });
     el('btnPNG').addEventListener('click', function () { viewer.exportPNG(); });
     el('btnJSON').addEventListener('click', function () { viewer.exportJSON(); });
+    el('btnCSV').addEventListener('click', function () {
+      try {
+        var out = TopologyCSVExport.download(viewer, mapName);
+        toast('CSV: ' + out.nodes + ' nodes, ' + out.edges + ' links');
+      } catch (err) {
+        toast('CSV export: ' + (err && err.message ? err.message : 'failed'));
+      }
+    });
     el('btnDrawIO').addEventListener('click', function () {
-      // The two failures worth naming are "no map" and "everything is
-      // filtered out". Both are things the person can act on, and a silent
-      // no-op after pressing an export button reads as a broken button.
       try {
         var n = DrawIOExport.download(viewer, mapName, el('drawioMode').value);
         toast('Exported ' + n + (n === 1 ? ' node' : ' nodes') + ' to draw.io');
       } catch (err) {
         toast('Draw.io export: ' + (err && err.message ? err.message : 'failed'));
+      }
+    });
+    el('btnLucid').addEventListener('click', function () {
+      // Lucidchart imports draw.io (.drawio). Prefer plain shapes — Cisco
+      // stencil libraries are often missing after Lucid import.
+      try {
+        var mode = el('drawioMode').value || 'shapes';
+        var n = DrawIOExport.download(viewer, mapName, mode, {
+          filenameSuffix: '-lucid',
+          ext: 'drawio',
+        });
+        toast('Lucid: ' + n + ' nodes → Import documents → Draw.io');
+      } catch (err) {
+        toast('Lucid export: ' + (err && err.message ? err.message : 'failed'));
       }
     });
     el('btnReload').addEventListener('click', loadMap);

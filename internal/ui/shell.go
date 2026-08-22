@@ -934,6 +934,23 @@ func (s *Shell) CloseCurrent() {
 	}
 }
 
+// Activate brings an instance to the front: selects its tab, or raises its
+// detached window. No-op for a nil or already-closed instance.
+func (s *Shell) Activate(inst *Instance) {
+	if s == nil || inst == nil || inst.closed.Load() {
+		return
+	}
+	if inst.win != nil {
+		inst.win.RequestFocus()
+		inst.settle()
+		return
+	}
+	if inst.tab != nil {
+		s.tabs.Select(inst.tab)
+		inst.settle()
+	}
+}
+
 // CloseOthers closes every instance except keep, including detached ones --
 // "close the others" means the others, and a window left behind after that
 // would be the one thing the person cannot see to close.

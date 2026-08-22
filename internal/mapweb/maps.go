@@ -53,6 +53,9 @@ func (f MapFile) Summary() string {
 	if !f.OK() {
 		return f.Problem
 	}
+	if f.Devices == 0 && f.Leaves == 0 {
+		return "empty crawl · " + age(time.Since(f.ModTime))
+	}
 	s := fmt.Sprintf("%d device%s", f.Devices, plural(f.Devices))
 	if f.Leaves > 0 {
 		s += fmt.Sprintf(", %d leaf%s", f.Leaves, leafPlural(f.Leaves))

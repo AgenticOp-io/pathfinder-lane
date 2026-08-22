@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -142,6 +143,11 @@ type Session struct {
 	// before Attach. It replaces the old sshConfig.LogEnabled, which is gone
 	// with the rest of the SSH-shaped config.
 	sessionLogEnabled bool
+
+	// Output watchers for script wait_for / wait_regex (see session_expect.go).
+	outMu     sync.Mutex
+	recentOut strings.Builder
+	outWatch  []*outWatcher
 }
 
 // NewSession creates a terminal widget with no transport attached. Input typed
@@ -332,6 +338,7 @@ func (s *Session) readLoop(ctx context.Context) {
 			// Tee the raw bytes to the transcript: exact stream, no framing
 			// assumptions.
 			s.logger.Load().Write(data)
+			s.noteOutput(data)
 
 			chunk := append(utf8tail, data...)
 			cut := completePrefixLen(chunk)

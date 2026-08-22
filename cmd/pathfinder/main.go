@@ -317,6 +317,8 @@ type host struct {
 	// that keeps working when the next map is loaded into it.
 	maps   *mapweb.Server
 	mapDir string
+	// mapCustomer is the last customer selected in the map picker / crawl map path.
+	mapCustomer string
 
 	// askingQuit is true while the quit confirmation is on screen. UI
 	// goroutine only, like everything else the close intercept touches,
@@ -661,16 +663,38 @@ func (h *host) saveTree(tr sessions.Tree) {
 // shape for that panel — a quarter-width column of icons is for the things done
 // constantly, and importing an estate is done once and then not again for
 // months.
-// tabsButton is the toolbar entry for acting on open tabs.
+// tabsButton is the toolbar entry for switching and closing open tabs.
 //
-// The items are greyed rather than hidden when they do not apply: a control
-// that disappears when there is nothing to close is a control nobody learns
-// is there.
+// When nothing is open the menu still shows a clear “No tabs open” line —
+// an all-disabled Close menu looked blank on Windows. With sessions open it
+// lists them so you can jump to one, then the close actions underneath.
 func (h *host) tabsButton() *ui.TipButton {
 	var btn *ui.TipButton
 	btn = ui.TipButtonLabeled("Tabs", theme.ListIcon(), func() {
 		open := h.shell.TabCount()
 		current := h.shell.Current()
+		items := make([]*fyne.MenuItem, 0, open+5)
+
+		if open == 0 {
+			none := fyne.NewMenuItem("No tabs open", nil)
+			none.Disabled = true
+			items = append(items, none)
+		} else {
+			for _, inst := range h.shell.Instances() {
+				inst := inst
+				label := inst.Title()
+				if label == "" {
+					label = "(untitled)"
+				}
+				if current != nil && inst == current {
+					label = "• " + label
+				}
+				items = append(items, fyne.NewMenuItem(label, func() {
+					h.shell.Activate(inst)
+				}))
+			}
+			items = append(items, fyne.NewMenuItemSeparator())
+		}
 
 		closeTab := fyne.NewMenuItem("Close Tab", h.shell.CloseCurrent)
 		closeTab.Disabled = current == nil
@@ -687,12 +711,13 @@ func (h *host) tabsButton() *ui.TipButton {
 		})
 		closeAll.Disabled = open == 0
 
-		menu := fyne.NewMenu("", closeTab, fyne.NewMenuItemSeparator(), closeOthers, closeAll)
+		items = append(items, closeTab, closeOthers, closeAll)
+		menu := fyne.NewMenu("", items...)
 		widget.ShowPopUpMenuAtRelativePosition(
 			menu, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
 	})
 	btn.Importance = widget.LowImportance
-	btn.SetToolTip("Close tabs")
+	btn.SetToolTip("Switch or close open tabs")
 	return btn
 }
 
@@ -726,6 +751,7 @@ func (h *host) buildMenu() {
 		fyne.NewMenuItem("Import session YAML…", h.importSessions),
 		fyne.NewMenuItem("Import topology map…", h.importMap),
 		fyne.NewMenuItem("Import SecureCRT sessions…", h.importSecureCRT),
+		fyne.NewMenuItem("Import customer crawl seeds (CSV)…", h.importCustomerCrawlCSV),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Export session YAML…", h.exportSessions),
 	}
@@ -741,6 +767,7 @@ func (h *host) buildMenu() {
 	sessionMenu := fyne.NewMenu("Session",
 		fyne.NewMenuItem("Transfer files (SFTP)…", h.openFileTransfer),
 		fyne.NewMenuItem("Run script…", h.runScriptDialog),
+		fyne.NewMenuItem("Script editor…", h.openScriptEditor),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Start / stop capture…", h.toggleCurrentCapture),
 		fyne.NewMenuItem("Save scrollback…", h.saveCurrentScrollback),
@@ -843,8 +870,42 @@ type scriptSend struct{ h *host }
 func (s scriptSend) SendActive(text string) { s.h.shell.SendToActive(text) }
 func (s scriptSend) SendAll(text string)    { s.h.shell.SendToAllTerminals(text) }
 
+func (s scriptSend) WaitForPattern(ctx context.Context, pattern string, regex bool, timeout time.Duration) error {
+	sess := s.h.activeScriptSession()
+	if sess == nil {
+		return fmt.Errorf("no active SSH session")
+	}
+	return sess.WaitForPattern(ctx, pattern, regex, timeout)
+}
+
+// activeScriptSession returns the Session mounted in the current terminal tab.
+func (h *host) activeScriptSession() *ui.Session {
+	if h == nil || h.shell == nil {
+		return nil
+	}
+	cur := h.shell.Current()
+	if cur == nil {
+		return nil
+	}
+	if ta, ok := cur.Applet().(*termApplet); ok {
+		return ta.sess
+	}
+	return nil
+}
+
 func (h *host) runScriptDialog() {
 	ui.ShowRunScriptDialog(h.win, h.loadScripts(), h.scriptSender(), &h.scriptCancel)
+}
+
+func (h *host) openScriptEditor() {
+	path := scripts.Path(ui.GetAppHome())
+	ui.ShowScriptEditor(h.win, ui.ScriptEditorOptions{
+		Path: path,
+		File: h.loadScripts(),
+		OnSaved: func(scripts.File) {
+			// Menu is rebuilt on each Scripts button tap from disk.
+		},
+	})
 }
 
 func (h *host) runNamedScript(name string) {
@@ -874,29 +935,26 @@ func (h *host) runNamedScript(name string) {
 
 // installScriptsBar loads ~/.pathfinderssh/scripts.yaml onto the toolbar.
 func (h *host) installScriptsBar() {
-	f := h.loadScripts()
-	path := scripts.Path(ui.GetAppHome())
-	menuItems := make([]*fyne.MenuItem, 0, len(f.Scripts)+3)
-	for _, sc := range f.Scripts {
-		sc := sc
-		menuItems = append(menuItems, fyne.NewMenuItem(sc.Name, func() {
-			h.runNamedScript(sc.Name)
-		}))
-	}
-	if len(menuItems) > 0 {
-		menuItems = append(menuItems, fyne.NewMenuItemSeparator())
-	}
-	menuItems = append(menuItems, fyne.NewMenuItem("Run script…", h.runScriptDialog))
-	menuItems = append(menuItems, fyne.NewMenuItem("Edit scripts.yaml…", func() {
-		dialog.ShowInformation("Scripts", "Edit "+path+" and restart Pathfinder.\nEach step: send + optional delay_ms. Use \\n for Return.\nscope: active|all", h.win)
-	}))
 	btn := ui.TipButtonLabeled("Scripts", theme.DocumentIcon(), nil)
 	btn.OnTapped = func() {
+		f := h.loadScripts()
+		menuItems := make([]*fyne.MenuItem, 0, len(f.Scripts)+4)
+		for _, sc := range f.Scripts {
+			sc := sc
+			menuItems = append(menuItems, fyne.NewMenuItem(sc.Name, func() {
+				h.runNamedScript(sc.Name)
+			}))
+		}
+		if len(f.Scripts) > 0 {
+			menuItems = append(menuItems, fyne.NewMenuItemSeparator())
+		}
+		menuItems = append(menuItems, fyne.NewMenuItem("Run script…", h.runScriptDialog))
+		menuItems = append(menuItems, fyne.NewMenuItem("Script editor…", h.openScriptEditor))
 		m := fyne.NewMenu("", menuItems...)
 		widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
 	}
 	btn.Importance = widget.LowImportance
-	btn.SetToolTip("Run YAML scripts into the terminal")
+	btn.SetToolTip("Run or edit scripts sent into the terminal")
 	h.shell.AddToolbar(btn)
 }
 
@@ -1076,31 +1134,37 @@ func (h *host) sendButton(b buttons.Button) {
 	h.shell.SendToActive(text)
 }
 
-// importMap turns a crawl's map.json into sessions.
-//
-// One flat folder per import, because a map has no structure worth keeping —
-// the person's folders are theirs to make, and a crawl has no opinion about
-// which of 600 devices belong together.
+// importMap turns a crawl's map.json into sessions under Customers/<name>/….
 func (h *host) importMap() {
 	dir := h.mapDir
 	if dir == "" && h.lastCrawl.MapPath != "" {
 		dir = filepath.Dir(h.lastCrawl.MapPath)
 	}
+	if dir == "" {
+		if c := h.mapCustomer; c != "" {
+			dir = ui.CustomerMapsDir(ui.GetAppHome(), c)
+		} else {
+			dir = ui.MapsRootDir(ui.GetAppHome())
+		}
+	}
 
 	h.pickFile([]string{".json"}, dir, func(path string, data []byte) {
 		h.mapDir = filepath.Dir(path)
+		if cust := ui.InferCustomerFromMapsPath(path); cust != "" {
+			h.mapCustomer = cust
+		}
 		if f := sessions.Sniff(data); f != sessions.FormatMap {
 			dialog.ShowError(fmt.Errorf("%s is a %s, not a topology map", filepath.Base(path), f), h.win)
 			return
 		}
-		h.askMapImport(mapFolderName(path), data)
+		h.askMapImport(path, mapFolderName(path), data)
 	})
 }
 
-// mapFolderName is the folder an imported map lands in unless the person says
-// otherwise. A crawl writes its map into a directory named after what was
-// crawled and calls the file map.json, so for that layout the DIRECTORY is the
-// name worth offering; anything else uses the filename.
+// mapFolderName is the site/crawl folder name under Customers/<customer>/
+// unless the person overrides it. Prefer the crawl date filename; if the file
+// is map.json, use the parent directory (often the customer — then we still
+// ask for a site name).
 func mapFolderName(path string) string {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if strings.EqualFold(base, "map") {
@@ -1111,22 +1175,40 @@ func mapFolderName(path string) string {
 	return base
 }
 
-// askMapImport collects the folder name and the one decision a map import has.
-//
-// Leaves are the devices a neighbour named and nothing ever dialled. They are
-// the bulk of a real map — hundreds of servers behind an exclude — and nothing
-// is known about them but a name, so they are off unless the leaf IS the target.
-func (h *host) askMapImport(defaultFolder string, data []byte) {
+// askMapImport collects customer + folder and the leaves decision.
+func (h *host) askMapImport(mapPath, defaultFolder string, data []byte) {
+	customers := h.customerNames()
+	inferred := ui.InferCustomerFromMapsPath(mapPath)
+	if inferred == "" {
+		inferred = h.mapCustomer
+	}
+	if inferred != "" {
+		customers = mergeStrings(inferred, customers)
+	}
+
+	custSel := widget.NewSelect(customers, nil)
+	if inferred != "" {
+		custSel.SetSelected(inferred)
+	} else if len(customers) > 0 {
+		custSel.SetSelected(customers[0])
+	}
+
 	name := widget.NewEntry()
-	name.SetText(defaultFolder)
-	name.SetPlaceHolder("Site, role, customer…")
+	// Avoid duplicating the customer name as the only folder under itself.
+	folderDef := defaultFolder
+	if inferred != "" && strings.EqualFold(folderDef, inferred) {
+		folderDef = time.Now().Format("crawl-2006-01-02")
+	}
+	name.SetText(folderDef)
+	name.SetPlaceHolder("Site or crawl name")
 
 	leaves := widget.NewCheck("", nil)
 	leafItem := widget.NewFormItem("Include leaves", leaves)
 	leafItem.HintText = "devices a neighbour reported but the crawl never dialled"
 
 	items := []*widget.FormItem{
-		widget.NewFormItem("Folder", name),
+		widget.NewFormItem("Customer", custSel),
+		widget.NewFormItem("Folder under customer", name),
 		leafItem,
 	}
 	d := dialog.NewForm("Import topology map", "Import", "Cancel", items,
@@ -1139,20 +1221,50 @@ func (h *host) askMapImport(defaultFolder string, data []byte) {
 				dialog.ShowError(err, h.win)
 				return
 			}
+			customer := strings.TrimSpace(custSel.Selected)
+			if customer == "" {
+				dialog.ShowError(fmt.Errorf("pick a customer"), h.win)
+				return
+			}
 			folder := strings.TrimSpace(name.Text)
 			if folder == "" {
 				folder = "Imported"
 			}
+			path := sessions.JoinPath(product.CustomersRoot, customer, folder)
 
-			// The same merge the session-file import uses, so both report
-			// themselves identically and a device already in the tree is
-			// skipped wherever it was filed.
 			tr := h.tree.Tree()
-			sum := tr.ImportFolders([]sessions.Folder{{Name: folder, Sessions: nodes}})
+			if _, err := (&tr).EnsureMSPLayout(); err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			if _, err := (&tr).CreateCustomer(product.CustomersRoot, customer); err != nil {
+				// CreateCustomer fails if it already exists — that is fine.
+				if !strings.Contains(strings.ToLower(err.Error()), "exist") {
+					dialog.ShowError(err, h.win)
+					return
+				}
+			}
+			sum := tr.ImportFolders([]sessions.Folder{{Name: path, Sessions: nodes}})
+			h.mapCustomer = customer
+			_, _ = ui.EnsureCustomerMapsDir(ui.GetAppHome(), customer)
 			h.applyImport(tr, sessions.FormatMap, sum)
 		}, h.win)
 	d.Show()
 	ui.EnterConfirmsForm(h.win, items, d.Submit)
+}
+
+func mergeStrings(first string, rest []string) []string {
+	out := []string{first}
+	seen := map[string]bool{strings.ToLower(first): true}
+	for _, s := range rest {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[strings.ToLower(s)] {
+			continue
+		}
+		seen[strings.ToLower(s)] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // applyImport puts the merged tree back, saves it, and says what happened.
@@ -1165,7 +1277,14 @@ func (h *host) askMapImport(defaultFolder string, data []byte) {
 func (h *host) applyImport(tr sessions.Tree, format sessions.Format, sum sessions.ImportSummary) {
 	h.tree.SetTree(tr)
 	h.saveTree(tr)
-	dialog.ShowInformation("Imported "+format.String(), sum.Describe()+"\n\nOrganised into Customers (your pick) and Unassigned.", h.win)
+	msg := sum.Describe()
+	switch format {
+	case sessions.FormatMap:
+		msg += "\n\nSessions were filed under Customers/<customer>/<folder>."
+	default:
+		// SecureCRT and other organised imports already explain in their wizards.
+	}
+	dialog.ShowInformation("Imported "+format.String(), msg, h.win)
 }
 
 // exportSessions writes the whole tree to a file of the person's choosing.
@@ -1499,13 +1618,14 @@ func (t *termApplet) SendBytes(b []byte) {
 // --- crawl -----------------------------------------------------------------
 
 func (h *host) launchCrawl() {
+	h.launchCrawlPrefill("", nil)
+}
+
+func (h *host) launchCrawlPrefill(customer string, seedHosts []string) {
 	h.lastCrawl.Params.VaultPath = h.runVaultPath()
-	home := ""
-	if h.vaultPath != "" {
-		home = filepath.Dir(h.vaultPath)
-	} else {
-		home = ui.GetAppHome()
-	}
+	// Maps always live under app home (~/.pathfinderssh/maps/…), not beside a
+	// relocated vault, so the Map picker and crawl writer agree.
+	home := ui.GetAppHome()
 	root := product.CustomersRoot
 	if h.tree != nil {
 		tr := h.tree.Tree()
@@ -1514,12 +1634,18 @@ func (h *host) launchCrawl() {
 		}
 		h.tree.SetTree(tr)
 	}
+	if c := strings.TrimSpace(customer); c != "" {
+		h.mapCustomer = c
+		_, _ = ui.EnsureCustomerMapsDir(home, c)
+	}
 	ui.ShowCrawlWizard(h.win, ui.CrawlWizardOptions{
-		Prev:          h.lastCrawl,
-		Sessions:      h.crawlSeedOptions(),
-		Customers:     h.customerNames(),
-		CustomersRoot: root,
-		HomeDir:       home,
+		Prev:             h.lastCrawl,
+		Sessions:         h.crawlSeedOptions(),
+		Customers:        h.customerNames(),
+		CustomersRoot:    root,
+		HomeDir:          home,
+		PrefillCustomer:  customer,
+		PrefillSeedHosts: seedHosts,
 		CreateCustomer: func(name string) (string, error) {
 			if h.tree == nil {
 				return "", fmt.Errorf("no session tree loaded")
@@ -1531,6 +1657,10 @@ func (h *host) launchCrawl() {
 			}
 			h.tree.SetTree(tr)
 			h.saveTree(tr)
+			if _, err := ui.EnsureCustomerMapsDir(home, name); err != nil {
+				log.Printf("[maps] create customer maps dir: %v", err)
+			}
+			h.mapCustomer = name
 			return path, nil
 		},
 	}, func(l ui.CrawlLaunch) {
@@ -1538,7 +1668,62 @@ func (h *host) launchCrawl() {
 			l.Params.VaultPath = h.runVaultPath()
 		}
 		h.lastCrawl = l
+		if c := ui.InferCustomerFromMapsPath(l.MapPath); c != "" {
+			h.mapCustomer = c
+		}
 		h.startCrawl(l)
+	})
+}
+
+// importCustomerCrawlCSV walks new-customer seed import: template → CSV → sessions → optional crawl.
+func (h *host) importCustomerCrawlCSV() {
+	home := ui.GetAppHome()
+	if h.vaultPath != "" {
+		home = filepath.Dir(h.vaultPath)
+	}
+	root := product.CustomersRoot
+	ui.ShowCustomerCrawlImportWizard(h.win, ui.CustomerCrawlImportOptions{
+		ExistingCustomers: h.customerNames(),
+		HomeDir:           home,
+		CreateCustomer: func(name string) (string, error) {
+			if h.tree == nil {
+				return "", fmt.Errorf("no session tree loaded")
+			}
+			tr := h.tree.Tree()
+			if _, err := (&tr).EnsureMSPLayout(); err != nil {
+				return "", err
+			}
+			path, err := tr.CreateCustomer(root, name)
+			if err != nil {
+				if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+					h.tree.SetTree(tr)
+					return sessions.CustomerPath(root, name), nil
+				}
+				return "", err
+			}
+			h.tree.SetTree(tr)
+			h.saveTree(tr)
+			_, _ = ui.EnsureCustomerMapsDir(home, name)
+			return path, nil
+		},
+	}, func(imp ui.CustomerCrawlImport) {
+		if h.tree == nil {
+			dialog.ShowError(fmt.Errorf("no session tree loaded"), h.win)
+			return
+		}
+		tr := h.tree.Tree()
+		var folders []sessions.Folder
+		for rel, nodes := range imp.Folders {
+			path := sessions.JoinPath(root, imp.Customer, rel)
+			folders = append(folders, sessions.Folder{Name: path, Sessions: nodes})
+		}
+		sum := tr.ImportFolders(folders)
+		h.mapCustomer = imp.Customer
+		_, _ = ui.EnsureCustomerMapsDir(home, imp.Customer)
+		h.applyImport(tr, sessions.FormatNative, sum)
+		if imp.StartCrawl {
+			h.launchCrawlPrefill(imp.Customer, imp.SeedHosts)
+		}
 	})
 }
 
@@ -1597,6 +1782,20 @@ func customerOfPath(root, folder string) string {
 }
 
 func (h *host) startCrawl(l ui.CrawlLaunch) {
+	l.MapPath = strings.TrimSpace(ui.ExpandHome(l.MapPath))
+	if l.MapPath == "" {
+		cust := strings.TrimSpace(h.mapCustomer)
+		if cust == "" {
+			cust = "Unassigned"
+		}
+		l.MapPath = filepath.Join(ui.CustomerMapsDir(ui.GetAppHome(), cust), time.Now().Format("crawl-2006-01-02.json"))
+		log.Printf("[crawl] MapPath was empty; defaulting to %s", l.MapPath)
+	}
+	if c := ui.InferCustomerFromMapsPath(l.MapPath); c != "" {
+		h.mapCustomer = c
+	}
+	h.lastCrawl = l
+
 	run := crawlrun.New()
 	view := ui.NewCrawlView(run)
 
@@ -1730,11 +1929,45 @@ func (h *host) startCrawl(l ui.CrawlLaunch) {
 		// summary that looked like a clean run.
 		if l.MapPath != "" {
 			if err := writeMap(devices, l.Params, l.MapPath); err != nil {
-				logf("pathfinder: %v", err)
+				log.Printf("pathfinder: write map: %v", err)
 				h.reportRunError(inst, err)
 			} else {
 				outputs = append(outputs, "map → "+l.MapPath)
+				mapPath := l.MapPath
+				fyne.Do(func() {
+					h.mapDir = filepath.Dir(mapPath)
+					if c := ui.InferCustomerFromMapsPath(mapPath); c != "" {
+						h.mapCustomer = c
+					}
+					dialog.ShowConfirm("Map saved",
+						"Topology map written to:\n"+mapPath+"\n\nOpen it now?",
+						func(ok bool) {
+							if !ok {
+								return
+							}
+							files, err := mapweb.ListMaps(filepath.Dir(mapPath))
+							if err != nil {
+								dialog.ShowError(err, h.win)
+								return
+							}
+							base := filepath.Base(mapPath)
+							for _, f := range files {
+								if strings.EqualFold(f.Name, base) {
+									h.openMap(f)
+									return
+								}
+							}
+							// Fresh write may not be listed if parse rejected empty —
+							// open by path directly.
+							h.openMap(mapweb.MapFile{Path: mapPath, Name: base})
+						}, h.win)
+				})
 			}
+		} else {
+			log.Printf("[crawl] no MapPath — topology not saved")
+			fyne.Do(func() {
+				dialog.ShowInformation("No map file", "This crawl had no map output path, so nothing was written under maps/.", h.win)
+			})
 		}
 		if l.SaveRun != "" {
 			if err := run.Snapshot(l.Params.Seeds, l.Params.Domains).Save(l.SaveRun); err != nil {
@@ -1752,16 +1985,19 @@ func (h *host) startCrawl(l ui.CrawlLaunch) {
 // The marshal error was previously discarded by an `if err == nil` with no
 // else, so a map that could not be encoded wrote nothing and said nothing.
 func writeMap(devices []*topo.Device, p crawlrun.Params, path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("map path is empty")
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return fmt.Errorf("map path is a directory — need a .json filename under it")
+	}
 	m := topo.Generate(devices, crawldial.MapOptions(p))
 	data, err := topo.MarshalMap(m)
 	if err != nil {
 		return fmt.Errorf("render map: %w", err)
 	}
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		// The path names a file the operator chose; making its parent
-		// is part of honouring that, and refusing to because one
-		// directory is missing is the kind of friction that gets a
-		// crawl re-run for nothing.
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
@@ -1781,23 +2017,29 @@ func writeMap(devices []*topo.Device, p crawlrun.Params, path string) error {
 // than results to read.
 // --- map -------------------------------------------------------------------
 
-// launchMap opens the picker. The folder it starts in is the one last used,
-// or the folder the last crawl wrote its map to — after a crawl that is
-// exactly where the person wants to be looking.
+// launchMap opens the per-customer map picker.
 func (h *host) launchMap() {
+	home := ui.GetAppHome()
+	root := ui.MapsRootDir(home)
+	_ = os.MkdirAll(root, 0o755)
+
+	initial := h.mapCustomer
+	if initial == "" && h.lastCrawl.MapPath != "" {
+		initial = ui.InferCustomerFromMapsPath(h.lastCrawl.MapPath)
+	}
 	dir := h.mapDir
 	if dir == "" && h.lastCrawl.MapPath != "" {
 		dir = filepath.Dir(h.lastCrawl.MapPath)
 	}
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			dir = home
-		}
-	}
 
-	ui.ShowMapDialog(h.win, dir, func(l ui.MapLaunch) {
+	ui.ShowCustomerMapDialog(h.win, ui.MapDialogOptions{
+		MapsRoot:        root,
+		Customers:       h.customerNames(),
+		InitialCustomer: initial,
+		InitialDir:      dir,
+	}, func(l ui.MapLaunch) {
 		h.mapDir = l.Dir
+		h.mapCustomer = l.Customer
 		h.openMap(l.File)
 	})
 }
@@ -1868,11 +2110,13 @@ func (h *host) mapConnect(n mapweb.NodeRef) {
 	}
 
 	fyne.Do(func() {
-		h.launchTerminal(node)
-		// The browser has focus when a node is clicked, so without this
-		// the session dialog opens behind it and has to be gone looking
-		// for. No-op under Wayland by Fyne's design, where the
-		// compositor decides.
+		folder := ""
+		title := "Map: " + n.Name
+		if c := strings.TrimSpace(h.mapCustomer); c != "" {
+			folder = sessions.JoinPath(product.CustomersRoot, c)
+			title = c + ": " + n.Name
+		}
+		h.launchTerminalTitled(title, folder, node)
 		h.win.RequestFocus()
 	})
 }
@@ -2300,9 +2544,9 @@ func (h *host) showSettings() {
 		Settings: h.base,
 		Paths:    h.hostPaths(),
 		OnSave: func(s ui.Settings) {
-			if s.AppVariant() != h.base.AppVariant() {
-				ui.ApplyAppTheme(h.app, s.AppVariant())
-			}
+			// Always reinstall the chrome theme so TreeExpandStyle icon remaps
+			// take effect (Icon() reads CurrentSettings).
+			ui.ApplyAppTheme(h.app, s.AppVariant())
 			h.base = s
 			ui.SetSettings(s)
 			// Persist synchronously. Async save looked responsive but lost
@@ -2315,6 +2559,10 @@ func (h *host) showSettings() {
 			if loaded, err := ui.LoadSettings(h.settingsPath); err == nil {
 				h.base = loaded
 				ui.SetSettings(loaded)
+				ui.ApplyAppTheme(h.app, loaded.AppVariant())
+			}
+			if h.tree != nil {
+				h.tree.RefreshView()
 			}
 			h.refreshOpenTerminalThemes()
 			h.refreshOpenTerminalScrollback()

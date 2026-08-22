@@ -86,6 +86,11 @@ type SettingsForm struct {
 	antiIdleKeys  *widget.Select
 	antiIdleGroup *fyne.Container
 
+	treeExpand     *widget.Select
+	treePrevClosed *widget.Icon
+	treePrevOpen   *widget.Icon
+	treePrevBar    *fyne.Container
+
 	labelToThemeKey map[string]string
 	themeKeyToLabel map[string]string
 
@@ -126,6 +131,9 @@ func (f *SettingsForm) SetSettings(s Settings) {
 	f.antiIdleSecs.SetText(v.AntiIdleIntervalSec)
 	f.antiIdleKeys.SetSelected(v.AntiIdleKeystroke)
 	f.applyAntiIdleState()
+
+	f.treeExpand.SetSelected(v.TreeExpandStyle)
+	f.refreshTreeExpandPreview()
 }
 
 // Settings reads the form. It reports false and leaves the status line
@@ -158,6 +166,9 @@ func (f *SettingsForm) read() SettingsFields {
 		AntiIdleEnabled:     f.antiIdle.Checked,
 		AntiIdleIntervalSec: f.antiIdleSecs.Text,
 		AntiIdleKeystroke:   f.antiIdleKeys.Selected,
+
+		TreeExpandStyle: f.treeExpand.Selected,
+		SftpShowHome:    f.opts.Settings.SftpShowHome,
 	}
 }
 
@@ -188,6 +199,19 @@ func (f *SettingsForm) build() {
 	f.antiIdleSecs = entry(strconv.Itoa(Defaults().AntiIdleIntervalSec))
 	f.antiIdleKeys = widget.NewSelect(AntiIdleKeystrokeChoices, nil)
 
+	f.treeExpand = widget.NewSelect(TreeExpandStyleChoices, func(string) {
+		f.refreshTreeExpandPreview()
+	})
+	f.treePrevClosed = widget.NewIcon(theme.NavigateNextIcon())
+	f.treePrevOpen = widget.NewIcon(theme.MoveDownIcon())
+	f.treePrevBar = container.NewHBox(
+		widget.NewLabel("Collapsed"),
+		f.treePrevClosed,
+		layout.NewSpacer(),
+		widget.NewLabel("Expanded"),
+		f.treePrevOpen,
+	)
+
 	f.status = statusLabel()
 
 	f.tabs = container.NewAppTabs(
@@ -212,7 +236,29 @@ func (f *SettingsForm) appearanceTab() fyne.CanvasObject {
 			"The application theme changes immediately. A font size or palette\n"+
 			"applies to tabs opened from now on — an open session keeps the\n"+
 			"size it measured its grid at."),
+		widget.NewSeparator(),
+		widget.NewLabel("Session folders. These are the expand/collapse controls on\n"+
+			"Customers and nested folders in the left inventory (Explorer-style)."),
+		form(
+			row("Folder expand icon", f.treeExpand),
+			row("Preview", f.treePrevBar),
+		),
+		widget.NewLabel("Save, then the session tree updates immediately."),
 	))
+}
+
+// refreshTreeExpandPreview shows the collapsed / expanded pair for the form value.
+func (f *SettingsForm) refreshTreeExpandPreview() {
+	if f.treePrevClosed == nil || f.treePrevOpen == nil {
+		return
+	}
+	style := TreeExpandStyleFromLabel(f.treeExpand.Selected)
+	closed, open := TreeExpandPreviewIcons(style)
+	f.treePrevClosed.SetResource(closed)
+	f.treePrevOpen.SetResource(open)
+	f.treePrevClosed.Refresh()
+	f.treePrevOpen.Refresh()
+	f.treePrevBar.Refresh()
 }
 
 func (f *SettingsForm) terminalTab() fyne.CanvasObject {

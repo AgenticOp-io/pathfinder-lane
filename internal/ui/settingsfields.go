@@ -77,6 +77,9 @@ type SettingsFields struct {
 	AntiIdleEnabled     bool
 	AntiIdleIntervalSec string
 	AntiIdleKeystroke   string
+
+	TreeExpandStyle string
+	SftpShowHome    bool
 }
 
 // SettingsFieldsOf renders settings into form values.
@@ -99,6 +102,9 @@ func SettingsFieldsOf(s Settings) SettingsFields {
 		AntiIdleEnabled:     s.AntiIdleEnabled,
 		AntiIdleIntervalSec: strconv.Itoa(s.AntiIdleIntervalSec),
 		AntiIdleKeystroke:   s.AntiIdleKeystroke,
+
+		TreeExpandStyle: s.TreeExpandStyle.Normalize().Label(),
+		SftpShowHome:    s.SftpShowHome,
 	}
 }
 
@@ -192,6 +198,11 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 			out.AntiIdleKeystroke = v
 		}
 	}
+
+	if v := strings.TrimSpace(f.TreeExpandStyle); v != "" {
+		out.TreeExpandStyle = TreeExpandStyleFromLabel(v)
+	}
+	out.SftpShowHome = f.SftpShowHome
 
 	return out.Normalized(), errs
 }

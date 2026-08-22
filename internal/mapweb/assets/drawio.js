@@ -346,7 +346,9 @@ const DrawIOExport = {
 
     const xml = [];
     xml.push('<?xml version="1.0" encoding="UTF-8"?>');
-    xml.push(`<mxfile host="pathfinderssh" modified="${new Date().toISOString()}" type="device">`);
+    // host=app.diagrams.net so Lucidchart’s draw.io importer accepts the file
+    // (Lucid rejects many third-party .xml exports that do not look like draw.io).
+    xml.push(`<mxfile host="app.diagrams.net" agent="PathfinderSSH" version="22.1.0" modified="${new Date().toISOString()}" type="device" editor="draw.io">`);
     xml.push(`  <diagram name="${this._escapeXml(title)}" id="topology">`);
     xml.push('    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">');
     xml.push('      <root>');
@@ -381,15 +383,21 @@ const DrawIOExport = {
   /**
    * Generate and hand the browser a file. Returns the node count so the caller
    * can say what was written; throws with a usable message when it cannot.
+   *
+   * options.filenameSuffix — e.g. '-lucid' before the extension
+   * options.ext — 'drawio' (default) or 'xml'
    */
-  download(viewer, mapName, shapeMode) {
+  download(viewer, mapName, shapeMode, options) {
+    options = options || {};
     const title = (mapName || 'map').replace(/\.json$/i, '');
     const xml = this.generate(viewer, { title: title, shapeMode: shapeMode });
+    const suffix = options.filenameSuffix || '';
+    const ext = options.ext === 'xml' ? 'xml' : 'drawio';
 
     const blob = new Blob([xml], { type: 'application/xml' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = title + '.drawio';
+    a.download = title + suffix + '.' + ext;
     a.click();
     URL.revokeObjectURL(a.href);
 

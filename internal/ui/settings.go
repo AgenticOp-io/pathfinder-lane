@@ -125,6 +125,13 @@ type Settings struct {
 	// so Normalized leaves it alone. Creating a vault clears it, since a
 	// decline that no longer describes anything is just a stale flag.
 	VaultPromptDeclined bool `json:"vault_prompt_declined,omitempty"`
+
+	// TreeExpandStyle is the expand/collapse glyph on the session folder tree
+	// (Customers / folders). Empty means DefaultTreeExpandStyle.
+	TreeExpandStyle TreeExpandStyle `json:"tree_expand_style,omitempty"`
+
+	// SftpShowHome adds a Home button on the SFTP dialog (login directory).
+	SftpShowHome bool `json:"sftp_show_home,omitempty"`
 }
 
 // Defaults returns a usable configuration.
@@ -145,6 +152,8 @@ func Defaults() Settings {
 		AntiIdleEnabled:     false,
 		AntiIdleIntervalSec: antiIdleDefaultIntervalSec,
 		AntiIdleKeystroke:   antiIdleDefaultKeystroke,
+		TreeExpandStyle:     DefaultTreeExpandStyle,
+		SftpShowHome:        false,
 	}
 }
 
@@ -191,6 +200,7 @@ func (s Settings) Normalized() Settings {
 	if s.AntiIdleKeystroke == "" {
 		s.AntiIdleKeystroke = antiIdleDefaultKeystroke
 	}
+	s.TreeExpandStyle = s.TreeExpandStyle.Normalize()
 	return s
 }
 

@@ -1,0 +1,4 @@
+host,name,protocol,port,username,folder,notes
+192.0.2.1,core-sw1,ssh,22,,seeds,Primary seed — replace with real gear
+192.0.2.2,edge-rtr,ssh,22,admin,seeds,
+example.com,jump-host,ssh,22,,,
