@@ -14,6 +14,7 @@ import (
 // ITGlueImportOptions configures the import dialog.
 type ITGlueImportOptions struct {
 	Organizations []itglue.Organization
+	CustomerNames []string
 	OnImport      func(orgID string, opts itglue.ImportDialogOptions) (itglue.ImportResult, error)
 }
 
@@ -38,6 +39,10 @@ func ShowITGlueImportDialog(w fyne.Window, opts ITGlueImportOptions) {
 	if len(labels) > 0 {
 		sel.SetSelected(labels[0])
 	}
+	picker := NewCustomerFolderPicker(opts.CustomerNames, labels[0])
+	sel.OnChanged = func(label string) {
+		picker.SetSuggested(opts.CustomerNames, label)
+	}
 	updateVault := widget.NewCheck("Update existing IT Glue credentials in vault", nil)
 	updateVault.SetChecked(true)
 	linkSessions := widget.NewCheck("Link vault credentials to SSH sessions under this customer", nil)
@@ -50,13 +55,18 @@ func ShowITGlueImportDialog(w fyne.Window, opts ITGlueImportOptions) {
 	body := container.NewVBox(
 		widget.NewLabel("Import passwords from IT Glue into your encrypted vault.\n"+
 			"API key must have Password Access enabled. Secrets stay in the vault — not logged.\n"+
-			"Pair with Auvik: import devices from Auvik, then link credentials from IT Glue."),
+			"Pair with any inventory source: sync devices first, then link credentials here."),
 		sel,
-		updateVault,
-		linkSessions,
-		onlyEmpty,
-		sshOnly,
+		widget.NewLabel("Session tree folder for linking:"),
 	)
+	if len(opts.CustomerNames) > 0 {
+		body.Add(picker.Select)
+	}
+	body.Add(picker.New)
+	body.Add(updateVault)
+	body.Add(linkSessions)
+	body.Add(onlyEmpty)
+	body.Add(sshOnly)
 
 	d := dialog.NewCustomConfirm("Import from IT Glue", "Import", "Cancel", body, func(ok bool) {
 		if !ok || opts.OnImport == nil {
@@ -72,7 +82,7 @@ func ShowITGlueImportDialog(w fyne.Window, opts ITGlueImportOptions) {
 			LinkSessions:   linkSessions.Checked,
 			OnlyEmptyCreds: onlyEmpty.Checked,
 			SSHFilter:      sshOnly.Checked,
-			CustomerName:   sel.Selected,
+			CustomerName:   picker.Chosen(),
 		}
 		st, err := opts.OnImport(id, imp)
 		if err != nil {
@@ -85,6 +95,6 @@ func ShowITGlueImportDialog(w fyne.Window, opts ITGlueImportOptions) {
 		}
 		dialog.ShowInformation("IT Glue import", msg, w)
 	}, w)
-	d.Resize(fyne.NewSize(560, 400))
+	d.Resize(fyne.NewSize(560, 440))
 	d.Show()
 }

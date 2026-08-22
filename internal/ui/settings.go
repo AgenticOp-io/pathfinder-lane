@@ -166,6 +166,55 @@ type Settings struct {
 	// IT Glue API (x-api-key). Env ITGLUE_API_KEY / ITGLUE_BASE_URL override when set.
 	ITGlueAPIKey  string `json:"itglue_api_key,omitempty"`
 	ITGlueBaseURL string `json:"itglue_base_url,omitempty"`
+
+	// Shared defaults for inventory sync (all RMM folders). Auvik-specific fields above
+	// fall back to these when empty during sync.
+	MSPInventoryDefUsername   string `json:"msp_inventory_def_username,omitempty"`
+	MSPInventoryDefCredential string `json:"msp_inventory_def_credential,omitempty"`
+
+	// Documentation vaults (credentials → encrypted local vault).
+	HuduAPIKey  string `json:"hudu_api_key,omitempty"`
+	HuduBaseURL string `json:"hudu_base_url,omitempty"`
+
+	PassportalAPIKey  string `json:"passportal_api_key,omitempty"`
+	PassportalTenant  string `json:"passportal_tenant,omitempty"`
+	PassportalBaseURL string `json:"passportal_base_url,omitempty"`
+
+	// PSA customer list → Customers/ folders.
+	ConnectWiseCompanyID  string `json:"connectwise_company_id,omitempty"`
+	ConnectWisePublicKey  string `json:"connectwise_public_key,omitempty"`
+	ConnectWisePrivateKey string `json:"connectwise_private_key,omitempty"`
+	ConnectWiseClientID   string `json:"connectwise_client_id,omitempty"`
+	ConnectWiseBaseURL    string `json:"connectwise_base_url,omitempty"`
+
+	AutotaskUsername           string `json:"autotask_username,omitempty"`
+	AutotaskSecret             string `json:"autotask_secret,omitempty"`
+	AutotaskAPIIntegrationCode string `json:"autotask_api_integration_code,omitempty"`
+	AutotaskBaseURL            string `json:"autotask_base_url,omitempty"`
+
+	HaloClientID     string `json:"halo_client_id,omitempty"`
+	HaloClientSecret string `json:"halo_client_secret,omitempty"`
+	HaloTenant       string `json:"halo_tenant,omitempty"`
+	HaloBaseURL      string `json:"halo_base_url,omitempty"`
+
+	// Inventory APIs (devices + IPs → Customers/<client>/<folder>/).
+	DomotzAPIKey  string `json:"domotz_api_key,omitempty"`
+	DomotzBaseURL string `json:"domotz_base_url,omitempty"`
+
+	NinjaClientID     string `json:"ninja_client_id,omitempty"`
+	NinjaClientSecret string `json:"ninja_client_secret,omitempty"`
+	NinjaBaseURL      string `json:"ninja_base_url,omitempty"`
+
+	DattoAPIKey  string `json:"datto_api_key,omitempty"`
+	DattoSecret  string `json:"datto_secret,omitempty"`
+	DattoBaseURL string `json:"datto_base_url,omitempty"`
+
+	AutomateUsername  string `json:"automate_username,omitempty"`
+	AutomatePassword  string `json:"automate_password,omitempty"`
+	AutomateServerURL string `json:"automate_server_url,omitempty"`
+
+	NcentralJWT       string `json:"ncentral_jwt,omitempty"`
+	NcentralServerURL string `json:"ncentral_server_url,omitempty"`
 }
 
 // Defaults returns a usable configuration.

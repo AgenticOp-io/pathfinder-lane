@@ -97,6 +97,50 @@ type SettingsFields struct {
 	AuvikDefCred      string
 	ITGlueAPIKey      string
 	ITGlueBaseURL     string
+
+	MSPDefUsername string
+	MSPDefCred     string
+
+	HuduAPIKey  string
+	HuduBaseURL string
+
+	PassportalAPIKey  string
+	PassportalTenant  string
+	PassportalBaseURL string
+
+	CWCompanyID  string
+	CWPublicKey  string
+	CWPrivateKey string
+	CWClientID   string
+	CWBaseURL    string
+
+	AutotaskUser  string
+	AutotaskSecret string
+	AutotaskCode   string
+	AutotaskBase   string
+
+	HaloClientID     string
+	HaloClientSecret string
+	HaloTenant       string
+	HaloBaseURL      string
+
+	DomotzAPIKey  string
+	DomotzBaseURL string
+
+	NinjaClientID     string
+	NinjaClientSecret string
+	NinjaBaseURL      string
+
+	DattoAPIKey  string
+	DattoSecret  string
+	DattoBaseURL string
+
+	AutomateUser  string
+	AutomatePass  string
+	AutomateServer string
+
+	NcentralJWT   string
+	NcentralServer string
 }
 
 // SettingsFieldsOf renders settings into form values.
@@ -139,6 +183,50 @@ func SettingsFieldsOf(s Settings) SettingsFields {
 		AuvikDefCred:      s.AuvikDefaultCredential,
 		ITGlueAPIKey:      s.ITGlueAPIKey,
 		ITGlueBaseURL:     s.ITGlueBaseURL,
+
+		MSPDefUsername: s.MSPInventoryDefUsername,
+		MSPDefCred:     s.MSPInventoryDefCredential,
+
+		HuduAPIKey:  s.HuduAPIKey,
+		HuduBaseURL: s.HuduBaseURL,
+
+		PassportalAPIKey:  s.PassportalAPIKey,
+		PassportalTenant:  s.PassportalTenant,
+		PassportalBaseURL: s.PassportalBaseURL,
+
+		CWCompanyID:  s.ConnectWiseCompanyID,
+		CWPublicKey:  s.ConnectWisePublicKey,
+		CWPrivateKey: s.ConnectWisePrivateKey,
+		CWClientID:   s.ConnectWiseClientID,
+		CWBaseURL:    s.ConnectWiseBaseURL,
+
+		AutotaskUser:   s.AutotaskUsername,
+		AutotaskSecret: s.AutotaskSecret,
+		AutotaskCode:   s.AutotaskAPIIntegrationCode,
+		AutotaskBase:   s.AutotaskBaseURL,
+
+		HaloClientID:     s.HaloClientID,
+		HaloClientSecret: s.HaloClientSecret,
+		HaloTenant:       s.HaloTenant,
+		HaloBaseURL:      s.HaloBaseURL,
+
+		DomotzAPIKey:  s.DomotzAPIKey,
+		DomotzBaseURL: s.DomotzBaseURL,
+
+		NinjaClientID:     s.NinjaClientID,
+		NinjaClientSecret: s.NinjaClientSecret,
+		NinjaBaseURL:      s.NinjaBaseURL,
+
+		DattoAPIKey:  s.DattoAPIKey,
+		DattoSecret:  s.DattoSecret,
+		DattoBaseURL: s.DattoBaseURL,
+
+		AutomateUser:   s.AutomateUsername,
+		AutomatePass:   s.AutomatePassword,
+		AutomateServer: s.AutomateServerURL,
+
+		NcentralJWT:    s.NcentralJWT,
+		NcentralServer: s.NcentralServerURL,
 	}
 }
 
@@ -257,6 +345,50 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 	out.AuvikDefaultCredential = strings.TrimSpace(f.AuvikDefCred)
 	out.ITGlueAPIKey = strings.TrimSpace(f.ITGlueAPIKey)
 	out.ITGlueBaseURL = strings.TrimSpace(f.ITGlueBaseURL)
+
+	out.MSPInventoryDefUsername = strings.TrimSpace(f.MSPDefUsername)
+	out.MSPInventoryDefCredential = strings.TrimSpace(f.MSPDefCred)
+
+	out.HuduAPIKey = strings.TrimSpace(f.HuduAPIKey)
+	out.HuduBaseURL = strings.TrimSpace(f.HuduBaseURL)
+
+	out.PassportalAPIKey = strings.TrimSpace(f.PassportalAPIKey)
+	out.PassportalTenant = strings.TrimSpace(f.PassportalTenant)
+	out.PassportalBaseURL = strings.TrimSpace(f.PassportalBaseURL)
+
+	out.ConnectWiseCompanyID = strings.TrimSpace(f.CWCompanyID)
+	out.ConnectWisePublicKey = strings.TrimSpace(f.CWPublicKey)
+	out.ConnectWisePrivateKey = strings.TrimSpace(f.CWPrivateKey)
+	out.ConnectWiseClientID = strings.TrimSpace(f.CWClientID)
+	out.ConnectWiseBaseURL = strings.TrimSpace(f.CWBaseURL)
+
+	out.AutotaskUsername = strings.TrimSpace(f.AutotaskUser)
+	out.AutotaskSecret = strings.TrimSpace(f.AutotaskSecret)
+	out.AutotaskAPIIntegrationCode = strings.TrimSpace(f.AutotaskCode)
+	out.AutotaskBaseURL = strings.TrimSpace(f.AutotaskBase)
+
+	out.HaloClientID = strings.TrimSpace(f.HaloClientID)
+	out.HaloClientSecret = strings.TrimSpace(f.HaloClientSecret)
+	out.HaloTenant = strings.TrimSpace(f.HaloTenant)
+	out.HaloBaseURL = strings.TrimSpace(f.HaloBaseURL)
+
+	out.DomotzAPIKey = strings.TrimSpace(f.DomotzAPIKey)
+	out.DomotzBaseURL = strings.TrimSpace(f.DomotzBaseURL)
+
+	out.NinjaClientID = strings.TrimSpace(f.NinjaClientID)
+	out.NinjaClientSecret = strings.TrimSpace(f.NinjaClientSecret)
+	out.NinjaBaseURL = strings.TrimSpace(f.NinjaBaseURL)
+
+	out.DattoAPIKey = strings.TrimSpace(f.DattoAPIKey)
+	out.DattoSecret = strings.TrimSpace(f.DattoSecret)
+	out.DattoBaseURL = strings.TrimSpace(f.DattoBaseURL)
+
+	out.AutomateUsername = strings.TrimSpace(f.AutomateUser)
+	out.AutomatePassword = strings.TrimSpace(f.AutomatePass)
+	out.AutomateServerURL = ExpandHome(f.AutomateServer)
+
+	out.NcentralJWT = strings.TrimSpace(f.NcentralJWT)
+	out.NcentralServerURL = ExpandHome(f.NcentralServer)
 
 	return out.Normalized(), errs
 }

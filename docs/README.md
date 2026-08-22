@@ -11,13 +11,20 @@ Repo: https://github.com/AgenticOp-io/pathfinderssh-msp · License: **GPL-3.0**
 | [**MSP-FEATURES.md**](MSP-FEATURES.md) | Engineers / MSP staff | Feature catalog with UI paths |
 | [**INSTALL.md**](INSTALL.md) | Installers | GUI installer, cloud sign-in, paths |
 
-## Integrations (middleware stack)
+## Integrations (cohesive MSP stack)
 
 | Doc | Contents |
 | --- | --- |
-| [**INTEGRATIONS.md**](INTEGRATIONS.md) | Auvik + IT Glue architecture (inventory + credentials) |
+| [**MSP-INTEGRATION-STACK.md**](MSP-INTEGRATION-STACK.md) | **Start here** — customers + inventory + credentials loop |
+| [**MSP-INTEGRATION-COMBINATIONS.md**](MSP-INTEGRATION-COMBINATIONS.md) | Every PSA × RMM × vault combination |
+| [**MSP-INTEGRATION-SETTINGS.md**](MSP-INTEGRATION-SETTINGS.md) | Settings → Tools field reference |
+| [**INTEGRATIONS.md**](INTEGRATIONS.md) | Architecture overview |
 | [**AUVIK-API.md**](AUVIK-API.md) | Auvik inventory sync, tunnel, settings |
 | [**ITGLUE-API.md**](ITGLUE-API.md) | IT Glue password import, vault, session linking |
+| [**DOMOTZ-API.md**](DOMOTZ-API.md) · [**NINJA-API.md**](NINJA-API.md) · [**DATTO-RMM-API.md**](DATTO-RMM-API.md) | Inventory alternatives |
+| [**AUTOMATE-API.md**](AUTOMATE-API.md) · [**NCENTRAL-API.md**](NCENTRAL-API.md) | RMM inventory |
+| [**HUDU-API.md**](HUDU-API.md) · [**PASSPORTAL-API.md**](PASSPORTAL-API.md) | Vault alternatives |
+| [**CONNECTWISE-API.md**](CONNECTWISE-API.md) · [**AUTOTASK-API.md**](AUTOTASK-API.md) · [**HALO-API.md**](HALO-API.md) | PSA customers |
 | [**CURSOR-AI.md**](CURSOR-AI.md) | Troubleshoot addon, side pane, Cloud Agents API |
 
 ## Access & security

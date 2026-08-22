@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/scottpeterman/pathfinderssh/internal/mspsync"
 	"github.com/scottpeterman/pathfinderssh/internal/product"
 	"github.com/scottpeterman/pathfinderssh/internal/sessions"
 )
@@ -74,6 +75,7 @@ func SyncTenantTree(t *sessions.Tree, devices []Device, opts SyncOptions) SyncRe
 		res.Errors = append(res.Errors, "customer name required")
 		return res
 	}
+	customer = mspsync.ResolveCustomerName(t.ListCustomers(root), customer)
 
 	if _, err := t.CreateCustomer(root, customer); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
@@ -157,6 +159,8 @@ func nodeFromDevice(d Device, opts SyncOptions) sessions.Node {
 	n.AuvikDeviceID = strings.TrimSpace(d.ID)
 	n.AuvikTenantID = strings.TrimSpace(d.TenantID)
 	n.AuvikDomain = strings.TrimSpace(opts.Tenant.Name)
+	n.IntegrationSource = mspsync.SourceAuvik
+	n.ExternalDeviceID = strings.TrimSpace(d.ID)
 	if opts.UseTunnelDefault {
 		n.AuvikUseTunnel = true
 	}
@@ -179,6 +183,14 @@ func mergeAuvikAuthority(existing, from sessions.Node, imp ImportOptions) (sessi
 	}
 	if from.AuvikDeviceID != "" && out.AuvikDeviceID != from.AuvikDeviceID {
 		out.AuvikDeviceID = from.AuvikDeviceID
+		changed = true
+	}
+	if from.ExternalDeviceID != "" && out.ExternalDeviceID != from.ExternalDeviceID {
+		out.ExternalDeviceID = from.ExternalDeviceID
+		changed = true
+	}
+	if from.IntegrationSource != "" && out.IntegrationSource != from.IntegrationSource {
+		out.IntegrationSource = from.IntegrationSource
 		changed = true
 	}
 	if from.AuvikTenantID != "" && out.AuvikTenantID != from.AuvikTenantID {
@@ -234,7 +246,14 @@ func indexCustomerSessions(t sessions.Tree, root, customer string) customerIndex
 func registerIndex(idx *customerIndex, folder string, n sessions.Node) {
 	loc := sessionLoc{folder: folder, label: n.Label()}
 	if id := strings.TrimSpace(n.AuvikDeviceID); id != "" {
-		idx.byAuvikID[id] = loc
+		idx.byAuvikID[mspsync.DeviceIDKey(mspsync.SourceAuvik, id)] = loc
+	}
+	if id := strings.TrimSpace(n.ExternalDeviceID); id != "" {
+		src := strings.TrimSpace(n.IntegrationSource)
+		if src == "" {
+			src = mspsync.SourceAuvik
+		}
+		idx.byAuvikID[mspsync.DeviceIDKey(src, id)] = loc
 	}
 	if h := strings.ToLower(strings.TrimSpace(n.Host)); h != "" {
 		idx.byHost[h] = loc
@@ -249,7 +268,8 @@ func registerIndex(idx *customerIndex, folder string, n sessions.Node) {
 
 func findMatch(idx customerIndex, d Device, want sessions.Node) (sessionLoc, string) {
 	if id := strings.TrimSpace(d.ID); id != "" {
-		if loc, ok := idx.byAuvikID[id]; ok {
+		key := mspsync.DeviceIDKey(mspsync.SourceAuvik, id)
+		if loc, ok := idx.byAuvikID[key]; ok {
 			return loc, "id"
 		}
 	}

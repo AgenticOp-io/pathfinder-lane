@@ -71,12 +71,14 @@ type SettingsFormOptions struct {
 	OnImportCRT       func()
 	OnImportCrawlCSV  func()
 	OnSyncCustomers   func()
-	OnImportAuvik     func()
-	OnSyncAuvik       func()
-	OnImportITGlue    func()
-	OnHelpQuickstart  func()
-	OnHelpContents    func()
-	OnAbout           func()
+
+	// MSP cloud sign-in only — hides integration Tools/File sections in solo mode.
+	MSPIntegrationsEnabled bool
+	MSPActions             *MSPIntegrationActions
+
+	OnHelpQuickstart func()
+	OnHelpContents   func()
+	OnAbout          func()
 }
 
 // SettingsForm is the settings editor. Build it with NewSettingsForm.
@@ -106,24 +108,13 @@ type SettingsForm struct {
 	treePrevOpen   *widget.Icon
 	treePrevBar    *fyne.Container
 
-	readOnly   *widget.Check
-	chgStart   *widget.Entry
-	chgEnd     *widget.Entry
-	cursorKey  *widget.Entry
-	tsAddon    *widget.Check
+	readOnly  *widget.Check
+	chgStart  *widget.Entry
+	chgEnd    *widget.Entry
+	cursorKey *widget.Entry
+	tsAddon   *widget.Check
 
-	auvikUser     *widget.Entry
-	auvikKey      *widget.Entry
-	auvikBase     *widget.Entry
-	auvikSync     *widget.Check
-	auvikInterval *widget.Entry
-	auvikTunnel   *widget.Entry
-	auvikAutoTun  *widget.Check
-	auvikDefUser  *widget.Entry
-	auvikDefCred  *widget.Entry
-
-	itglueKey  *widget.Entry
-	itglueBase *widget.Entry
+	mspPanel *MSPIntegrationPanel
 
 	labelToThemeKey map[string]string
 	themeKeyToLabel map[string]string
@@ -175,18 +166,9 @@ func (f *SettingsForm) SetSettings(s Settings) {
 	f.cursorKey.SetText(v.CursorAPIKey)
 	f.tsAddon.SetChecked(v.TroubleshootAddon)
 
-	f.auvikUser.SetText(v.AuvikUsername)
-	f.auvikKey.SetText(v.AuvikAPIKey)
-	f.auvikBase.SetText(v.AuvikBaseURL)
-	f.auvikSync.SetChecked(v.AuvikSyncEnabled)
-	f.auvikInterval.SetText(v.AuvikSyncInterval)
-	f.auvikTunnel.SetText(v.AuvikTunnelPath)
-	f.auvikAutoTun.SetChecked(v.AuvikAutoTunnel)
-	f.auvikDefUser.SetText(v.AuvikDefUsername)
-	f.auvikDefCred.SetText(v.AuvikDefCred)
-
-	f.itglueKey.SetText(v.ITGlueAPIKey)
-	f.itglueBase.SetText(v.ITGlueBaseURL)
+	if f.mspPanel != nil {
+		f.mspPanel.load(v)
+	}
 }
 
 // Settings reads the form. It reports false and leaves the status line
@@ -202,7 +184,7 @@ func (f *SettingsForm) Settings() (Settings, bool) {
 }
 
 func (f *SettingsForm) read() SettingsFields {
-	return SettingsFields{
+	base := SettingsFields{
 		AppTheme:      f.appTheme.Selected,
 		TerminalTheme: f.themeKeyFor(f.termTheme.Selected),
 		FontSize:      f.fontSize.Selected,
@@ -228,19 +210,11 @@ func (f *SettingsForm) read() SettingsFields {
 		ChangeWindowEnd:   f.chgEnd.Text,
 		CursorAPIKey:      f.cursorKey.Text,
 		TroubleshootAddon: f.tsAddon.Checked,
-
-		AuvikUsername:     f.auvikUser.Text,
-		AuvikAPIKey:         f.auvikKey.Text,
-		AuvikBaseURL:        f.auvikBase.Text,
-		AuvikSyncEnabled:    f.auvikSync.Checked,
-		AuvikSyncInterval:   f.auvikInterval.Text,
-		AuvikTunnelPath:     f.auvikTunnel.Text,
-		AuvikAutoTunnel:     f.auvikAutoTun.Checked,
-		AuvikDefUsername:    f.auvikDefUser.Text,
-		AuvikDefCred:        f.auvikDefCred.Text,
-		ITGlueAPIKey:        f.itglueKey.Text,
-		ITGlueBaseURL:       f.itglueBase.Text,
 	}
+	if f.mspPanel != nil {
+		return f.mspPanel.fields(base)
+	}
+	return base
 }
 
 func (f *SettingsForm) build() {
@@ -290,20 +264,9 @@ func (f *SettingsForm) build() {
 	f.cursorKey.Password = true
 	f.tsAddon = widget.NewCheck("Enable Troubleshoot addon (Ops → Troubleshoot agent)", nil)
 
-	f.auvikUser = entry("Auvik user email")
-	f.auvikKey = entry("API key")
-	f.auvikKey.Password = true
-	f.auvikBase = entry("https://auvikapi.us1.my.auvik.com")
-	f.auvikSync = widget.NewCheck("Periodic Auvik inventory sync (all clients)", nil)
-	f.auvikInterval = entry("60")
-	f.auvikTunnel = entry("Path to AuvikTunnel.exe (optional)")
-	f.auvikAutoTun = widget.NewCheck("Try AuvikTunnel when direct SSH fails", nil)
-	f.auvikDefUser = entry("Default SSH username for new devices")
-	f.auvikDefCred = entry("Default vault credential name")
-
-	f.itglueKey = entry("ITG.… API key")
-	f.itglueKey.Password = true
-	f.itglueBase = entry("https://api.itglue.com")
+	if f.opts.MSPIntegrationsEnabled {
+		f.mspPanel = newMSPIntegrationPanel()
+	}
 
 	f.status = statusLabel()
 
@@ -405,7 +368,7 @@ func (f *SettingsForm) sessionsTab() fyne.CanvasObject {
 }
 
 func (f *SettingsForm) opsTab() fyne.CanvasObject {
-	return container.NewVScroll(container.NewVBox(
+	rows := []fyne.CanvasObject{
 		widget.NewLabelWithStyle("Change control", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel("Read-only blocks typing and Send/macros (anti-idle still runs).\n"+
 			"A change window limits when sends are allowed (overnight OK, e.g. 22:00–06:00)."),
@@ -421,34 +384,11 @@ func (f *SettingsForm) opsTab() fyne.CanvasObject {
 		form(row("Cursor API key", f.cursorKey)),
 		widget.NewLabel("Prefer CURSOR_API_KEY in the environment. This field is an optional\n"+
 			"local override. Create a key at cursor.com/dashboard → API Keys."),
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("Auvik inventory", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Sync device IPs from Auvik. Existing sessions under the same customer\n"+
-			"are merged by device id, IP, or name; Auvik is authority when IPs change."),
-		form(
-			row("Username", f.auvikUser),
-			row("API key", f.auvikKey),
-			row("API base URL", f.auvikBase),
-			row("Periodic sync", f.auvikSync),
-			row("Sync every (min)", f.auvikInterval),
-			row("AuvikTunnel path", f.auvikTunnel),
-			row("Auto tunnel", f.auvikAutoTun),
-			row("Default SSH user", f.auvikDefUser),
-			row("Default credential", f.auvikDefCred),
-		),
-		widget.NewLabel("Env AUVIK_USERNAME, AUVIK_API_KEY, AUVIK_BASE_URL, and AUVIK_TUNNEL_BIN\n"+
-			"override these fields when set."),
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("IT Glue credentials", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Import username/password records into the vault. API key needs Password Access.\n"+
-			"Use with Auvik inventory: devices from Auvik, credentials from IT Glue."),
-		form(
-			row("API key", f.itglueKey),
-			row("API base URL", f.itglueBase),
-		),
-		widget.NewLabel("Env ITGLUE_API_KEY and ITGLUE_BASE_URL override when set.\n"+
-			"EU: https://api.eu.itglue.com · AU: https://api.au.itglue.com"),
-	))
+	}
+	if f.mspPanel != nil {
+		rows = append(rows, widget.NewSeparator(), f.mspPanel.content())
+	}
+	return container.NewVScroll(container.NewVBox(rows...))
 }
 
 func (f *SettingsForm) fileTab() fyne.CanvasObject {
@@ -479,32 +419,8 @@ func (f *SettingsForm) fileTab() fyne.CanvasObject {
 	if opts.OnImportCrawlCSV != nil {
 		rows = append(rows, widget.NewButton("Import customer crawl seeds (CSV)…", opts.OnImportCrawlCSV))
 	}
-	if opts.OnImportAuvik != nil {
-		rows = append(rows, widget.NewSeparator(),
-			widget.NewLabelWithStyle("Auvik RMM", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			widget.NewLabel("Sync device IPs from Auvik inventory into Customers/<client>/Auvik/.\n"+
-				"Existing sessions are merged; Auvik updates IPs on sync. Passwords are not exported by Auvik."),
-			widget.NewButton("Import devices from Auvik…", opts.OnImportAuvik),
-		)
-	}
-	if opts.OnSyncAuvik != nil {
-		rows = append(rows, widget.NewButton("Sync all Auvik clients now…", opts.OnSyncAuvik))
-	}
-	if opts.OnImportITGlue != nil {
-		rows = append(rows, widget.NewSeparator(),
-			widget.NewLabelWithStyle("IT Glue", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			widget.NewLabel("Import passwords into the vault and link SSH sessions under Customers/<org>/.\n"+
-				"Secrets are never logged — only stored in your encrypted vault."),
-			widget.NewButton("Import credentials from IT Glue…", opts.OnImportITGlue),
-		)
-	}
-	if opts.OnSyncCustomers != nil {
-		rows = append(rows, widget.NewSeparator(),
-			widget.NewLabelWithStyle("Customers folder", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			widget.NewLabel("Import customer names from a PSA/RMM export file\n"+
-				"(ConnectWise, Autotask, etc.) into the Customers tree."),
-			widget.NewButton("Import customer list…", opts.OnSyncCustomers),
-		)
+	if opts.MSPIntegrationsEnabled && opts.MSPActions != nil {
+		rows = append(rows, mspFileTabRows(opts.MSPActions)...)
 	}
 	rows = append(rows, widget.NewSeparator(),
 		widget.NewLabelWithStyle("Help", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),

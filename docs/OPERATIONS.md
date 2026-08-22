@@ -9,11 +9,13 @@
 
 ## Onboarding a new customer
 
-1. Create folder under **Customers** (or import from PSA JSON)
-2. Sync Auvik tenant → populates `Auvik/` devices
-3. IT Glue import → fills vault passwords and links sessions
-4. File missing sessions manually or via CSV crawl seeds
+1. **Sync customers** from PSA (ConnectWise, Autotask, Halo) or import `psa-customers.json`
+2. **Sync inventory** — pick one source (Auvik, Domotz, NinjaOne, Datto RMM, Automate, N-central)
+3. **Import credentials** from IT Glue, Hudu, or Passportal → vault + session linking
+4. Add crawl seeds or manual sessions for gaps
 5. Run crawl from seed host → import map under `maps/<Customer>/`
+
+See [MSP-INTEGRATION-STACK.md](MSP-INTEGRATION-STACK.md).
 
 ## Working a ticket
 
@@ -40,13 +42,15 @@ Unassigned/         # triage imports here, drag to customer when known
 | Solo | Rotate vault password; remove Windows login |
 | Entra / Google | Disable account in IdP; revoke app tokens |
 
-## Imports
+## Imports (MSP cloud sign-in required)
 
-| Source | Menu / action |
-| --- | --- |
-| SecureCRT | First-run wizard or File → Import |
-| Auvik | Settings / File → Sync |
-| IT Glue | Settings → Tools → Import passwords |
-| Crawl seeds CSV | File → Import customer crawl seeds |
+| Layer | Source | Action |
+| --- | --- | --- |
+| Customers | ConnectWise / Autotask / Halo | File → Sync customers… |
+| Customers | `psa-customers.json` | File → Import PSA customers |
+| Inventory | Auvik / Domotz / Ninja / Datto / Automate / N-central | File → Sync devices… |
+| Credentials | IT Glue / Hudu / Passportal | File → Import credentials… |
+| Legacy | SecureCRT | First-run wizard or File → Import |
+| Crawl | CSV seeds | File → Import customer crawl seeds |
 
 Example CSV: [customer-crawl-seeds.example.csv](customer-crawl-seeds.example.csv)

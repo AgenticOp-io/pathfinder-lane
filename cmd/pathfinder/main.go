@@ -1905,8 +1905,9 @@ func (h *host) importFromAuvik() {
 		return
 	}
 	ui.ShowAuvikImportDialog(h.win, ui.AuvikImportOptions{
-		Tenants: tenants,
-		OnImport: func(tenantIDs []string, imp auvik.ImportOptions) (auvik.ImportStats, error) {
+		Tenants:       tenants,
+		CustomerNames: h.mspCustomerNames(),
+		OnImport: func(tenantIDs []string, customerFolder string, imp auvik.ImportOptions) (auvik.ImportStats, error) {
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel2()
 			devs, err := cli.ListDevices(ctx2, tenantIDs, 300)
@@ -1930,10 +1931,15 @@ func (h *host) importFromAuvik() {
 			if strings.TrimSpace(imp.DefaultCredential) == "" {
 				imp.DefaultCredential = h.base.AuvikDefaultCredential
 			}
+			customer := h.resolveMSPCustomer(customerFolder)
+			if customer == "" {
+				customer = h.resolveMSPCustomer(tenant.Name)
+			}
 			tr := h.tree.Tree()
 			syncRes := auvik.SyncTenantTree(&tr, devs, auvik.SyncOptions{
 				ImportOptions:     imp,
 				Tenant:            *tenant,
+				CustomerName:      customer,
 				MoveToAuvikFolder: true,
 				UseTunnelDefault:  h.base.AuvikAutoTunnel,
 			})
@@ -1975,6 +1981,7 @@ func (h *host) importFromITGlue() {
 	}
 	ui.ShowITGlueImportDialog(h.win, ui.ITGlueImportOptions{
 		Organizations: orgs,
+		CustomerNames: h.mspCustomerNames(),
 		OnImport: func(orgID string, imp itglue.ImportDialogOptions) (itglue.ImportResult, error) {
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 180*time.Second)
 			defer cancel2()
@@ -2001,11 +2008,11 @@ func (h *host) importFromITGlue() {
 				if err != nil {
 					res.Errors = append(res.Errors, err.Error())
 				} else {
-					customer := strings.TrimSpace(imp.CustomerName)
+					customer := h.resolveMSPCustomer(strings.TrimSpace(imp.CustomerName))
 					if customer == "" {
 						for _, o := range orgs {
 							if o.ID == orgID {
-								customer = o.Name
+								customer = h.resolveMSPCustomer(o.Name)
 								break
 							}
 						}
@@ -2040,11 +2047,12 @@ type auvikSyncAggregate struct {
 }
 
 func (h *host) auvikImportDefaults() auvik.ImportOptions {
+	user, cred := h.mspInventoryDefaults()
 	return auvik.ImportOptions{
 		NetworkGearOnly:        true,
 		RequireLoginAuthorized: true,
-		DefaultUsername:        h.base.AuvikDefaultUsername,
-		DefaultCredential:      h.base.AuvikDefaultCredential,
+		DefaultUsername:        user,
+		DefaultCredential:      cred,
 	}
 }
 
@@ -2052,6 +2060,7 @@ func (h *host) auvikSyncDefaults(tenant auvik.Tenant) auvik.SyncOptions {
 	return auvik.SyncOptions{
 		ImportOptions:     h.auvikImportDefaults(),
 		Tenant:            tenant,
+		CustomerName:      h.resolveMSPCustomer(tenant.Name),
 		MoveToAuvikFolder: true,
 		UseTunnelDefault:  h.base.AuvikAutoTunnel,
 	}
@@ -3658,21 +3667,19 @@ func (h *host) showSettings() {
 		ui.SetSettings(loaded)
 	}
 	ui.ShowSettings(h.win, ui.SettingsFormOptions{
-		Settings:         h.base,
-		Paths:            h.hostPaths(),
-		OnManageVault:    h.manageVault,
-		OnImportSessions: h.importSessions,
-		OnExportSessions: h.exportSessions,
-		OnImportMap:      h.importMap,
-		OnImportCRT:      h.importSecureCRT,
-		OnImportCrawlCSV: h.importCustomerCrawlCSV,
-		OnSyncCustomers:  h.syncPSACustomers,
-		OnImportAuvik:      h.importFromAuvik,
-		OnSyncAuvik:          h.syncAuvikNow,
-		OnImportITGlue:       h.importFromITGlue,
-		OnHelpQuickstart: func() { ui.ShowHelp(h.win, helpdoc.TopicQuickstart) },
-		OnHelpContents:   func() { ui.ShowHelp(h.win, "") },
-		OnAbout:          h.showAbout,
+		Settings:               h.base,
+		Paths:                  h.hostPaths(),
+		MSPIntegrationsEnabled: h.mspIntegrationsEnabled(),
+		MSPActions:             h.mspIntegrationActions(),
+		OnManageVault:          h.manageVault,
+		OnImportSessions:       h.importSessions,
+		OnExportSessions:       h.exportSessions,
+		OnImportMap:            h.importMap,
+		OnImportCRT:            h.importSecureCRT,
+		OnImportCrawlCSV:       h.importCustomerCrawlCSV,
+		OnHelpQuickstart:       func() { ui.ShowHelp(h.win, helpdoc.TopicQuickstart) },
+		OnHelpContents:         func() { ui.ShowHelp(h.win, "") },
+		OnAbout:                h.showAbout,
 		OnSave: func(s ui.Settings) {
 			// Always reinstall the chrome theme so TreeExpandStyle icon remaps
 			// take effect (Icon() reads CurrentSettings).

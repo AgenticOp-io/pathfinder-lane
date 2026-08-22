@@ -54,14 +54,21 @@ User data: `%USERPROFILE%\.pathfinderssh\` (sessions, vault, maps, scripts, sett
 - Packages: `internal/idp`, `internal/mspenroll`, `internal/mspauth`
 - Tools: `pathfinder -install-gui`, `cmd/pfinstall`, `cmd/pfenroll`
 
-### RMM / documentation integrations
+### MSP integrations (cohesive stack — cloud sign-in only)
 
-| System | What Pathfinder does | What it does *not* do |
+Three roles merge in `Customers/<client>/`:
+
+| Role | Systems | Outcome |
 | --- | --- | --- |
-| **Auvik** | List tenants/devices; sync IPs into `Customers/<client>/Auvik/`; merge by device id/IP/name; periodic sync; **AuvikTunnel** fallback on failed SSH | Export device passwords; headless SSH via API |
-| **IT Glue** | List orgs/passwords; import plaintext into **vault** (API key + Password Access); link credentials to sessions under customer | Rotation, JIT bastion, compliance audits (planned extensions) |
+| **Customers** | ConnectWise, Autotask, Halo, `psa-customers.json` | `Customers/<name>/` folders |
+| **Inventory** | Auvik, Domotz, NinjaOne, Datto RMM, Automate, N-central | SSH sessions with IPs; re-sync updates addresses |
+| **Credentials** | IT Glue, Hudu, Passportal | Vault passwords linked to sessions by host/name |
 
-Recommended flow: **Auvik** for targets → **IT Glue** for credentials → connect via vault.
+Pick **one per layer** — not every vendor. Inventory does not export SSH passwords; pair with a vault.
+
+→ [MSP-INTEGRATION-STACK.md](MSP-INTEGRATION-STACK.md)
+
+Excluded: audit-only platforms that do not feed live SSH targets (e.g. Liongard).
 
 ### AI troubleshooting (optional addon)
 
@@ -85,6 +92,12 @@ cmd/pfenroll/       Enrollment wizard only
 cmd/pfvault/        Vault CLI
 internal/auvik/     Auvik API client + sync
 internal/itglue/    IT Glue API + vault/session link
+internal/invsync/   Generic inventory → session tree
+internal/docvault/  Generic vault import + session link
+internal/mspsync/   Stack folder names and tags
+internal/connectwise/ internal/autotask/ internal/halo/  PSA customers
+internal/domotz/ internal/ninja/ internal/dattormm/ internal/automate/ internal/ncentral/  Inventory
+internal/hudu/ internal/passportal/  Doc vault
 internal/idp/       OIDC (Entra, Google)
 internal/mspauth/   Auth orchestration
 internal/mspenroll/ Org enrollment file
@@ -106,9 +119,11 @@ docs/               This documentation set
 | Install wizard + Solo/O365/Google | **Shipped** |
 | Auvik sync + tunnel | **Shipped** |
 | IT Glue vault import + session link | **Shipped** |
+| Tier-1 inventory (Domotz, Ninja, Datto, Automate, N-central) | **Shipped** (API clients; validate against live tenants) |
+| Tier-1 vault (Hudu, Passportal) | **Shipped** |
+| Tier-1 PSA (ConnectWise, Autotask, Halo) | **Shipped** |
 | Cursor AI pane + troubleshoot addon | **Shipped** (addon gated) |
-| Live ConnectWise/Autotask APIs | **Not shipped** (JSON file adapter only) |
-| JIT bastion, compliance cop, password rotation | **Roadmap** (see INTEGRATIONS.md) |
+| JIT bastion, compliance cop, password rotation | **Roadmap** |
 
 ---
 
