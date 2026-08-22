@@ -382,7 +382,7 @@ func (m *vaultManager) showForm(title string, f CredentialForm, id string, save 
 	priority := entryWith(f.Priority)
 	priority.SetPlaceHolder("0 — lower runs first")
 	tags := entryWith(f.Tags)
-	tags.SetPlaceHolder("comma separated")
+	tags.SetPlaceHolder("customer:Acme, break-glass — comma separated")
 
 	domain := entryWith(f.DomainSuffix)
 	domain.SetPlaceHolder("lab.example — blank matches every device")

@@ -162,9 +162,17 @@ func (t *SessionTree) SelectedFolder() string {
 	return ""
 }
 
+// FocusFilter puts the keyboard in the session tree filter box (Ctrl+L).
+func (t *SessionTree) FocusFilter() {
+	if t == nil || t.search == nil || t.opts.Window == nil {
+		return
+	}
+	t.opts.Window.Canvas().Focus(t.search)
+}
+
 func (t *SessionTree) build() {
 	t.search = widget.NewEntry()
-	t.search.SetPlaceHolder("Filter by folder/session name")
+	t.search.SetPlaceHolder("Filter by folder/session name (Ctrl+L)")
 	t.search.OnChanged = func(string) { t.scheduleFilterRefresh() }
 
 	t.status = widget.NewLabel("")

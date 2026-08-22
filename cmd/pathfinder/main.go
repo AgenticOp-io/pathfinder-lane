@@ -50,7 +50,9 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -66,9 +68,11 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/crawler"
 	"github.com/scottpeterman/pathfinderssh/internal/crawlrun"
 	"github.com/scottpeterman/pathfinderssh/internal/crtimport"
+	"github.com/scottpeterman/pathfinderssh/internal/evidence"
 	helpdoc "github.com/scottpeterman/pathfinderssh/internal/help"
 	"github.com/scottpeterman/pathfinderssh/internal/mapweb"
 	"github.com/scottpeterman/pathfinderssh/internal/product"
+	"github.com/scottpeterman/pathfinderssh/internal/psasync"
 	"github.com/scottpeterman/pathfinderssh/internal/recent"
 	"github.com/scottpeterman/pathfinderssh/internal/scripts"
 	"github.com/scottpeterman/pathfinderssh/internal/serialx"
@@ -179,6 +183,8 @@ func main() {
 		settingsPath: settingsPath,
 		vaultPath:    ui.ExpandHome(*vaultPath),
 		verbose:      *verbose,
+		forwards:     ui.NewForwardHub(),
+		guardedSend:  true,
 	}
 	if h.vaultPath == "" {
 		h.vaultPath = vaultcli.DefaultPath()
@@ -212,6 +218,7 @@ func main() {
 
 	h.buildSessionTree(ui.ExpandHome(*sessionsPath))
 	h.buildMenu()
+	h.installShortcuts()
 
 	h.vaultBtn = ui.TipIconButtonLow("Unlock or manage the credential vault", theme.LoginIcon(), h.showVaultDialog)
 	h.shell.AddToolbar(h.vaultBtn)
@@ -328,6 +335,12 @@ type host struct {
 
 	// scriptCancel stops an in-flight YAML script between steps.
 	scriptCancel atomic.Pointer[context.CancelFunc]
+
+	// forwards tracks SSH port forwards so session close / quit can stop them.
+	forwards *ui.ForwardHub
+
+	// guardedSend, when true, confirms before Send to all / customer.
+	guardedSend bool
 }
 
 // shutdown ends the application: applets first, then the map server, then the
@@ -342,6 +355,9 @@ func (h *host) shutdown() {
 	// can block, so each instance's OnClose already runs on its own
 	// goroutine -- this just makes sure they all start.
 	h.shell.CloseAll()
+	if h.forwards != nil {
+		h.forwards.StopAll()
+	}
 	// Stop answering the browser. A map left open in a tab after the
 	// application exits should fail honestly rather than look live until
 	// something is clicked.
@@ -505,6 +521,7 @@ func (h *host) buildSessionTree(path string) {
 	h.tree.SetTree(tr)
 	h.shell.SetSide(h.tree.Content(), 0.25)
 	h.installButtonBar()
+	h.installOpsStrip()
 	h.installScriptsBar()
 
 
@@ -766,11 +783,13 @@ func (h *host) buildMenu() {
 
 	sessionMenu := fyne.NewMenu("Session",
 		fyne.NewMenuItem("Transfer files (SFTP)…", h.openFileTransfer),
+		fyne.NewMenuItem("Port forwards…", h.openPortForwards),
 		fyne.NewMenuItem("Run script…", h.runScriptDialog),
 		fyne.NewMenuItem("Script editor…", h.openScriptEditor),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Start / stop capture…", h.toggleCurrentCapture),
 		fyne.NewMenuItem("Save scrollback…", h.saveCurrentScrollback),
+		fyne.NewMenuItem("Pack ticket evidence…", h.packTicketEvidence),
 	)
 
 	// A menu as well as the toolbar button. The toolbar answers "is the
@@ -784,6 +803,12 @@ func (h *host) buildMenu() {
 		fyne.NewMenuItem("Unlock / lock…", h.showVaultDialog),
 	)
 
+	opsMenu := fyne.NewMenu("Ops",
+		fyne.NewMenuItem("Sync PSA customers (stub)…", h.syncPSACustomers),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Toggle guarded multi-send", h.toggleGuardedSend),
+	)
+
 	// No Quit item: Fyne appends one to the first menu itself, and its
 	// action goes through the window's close intercept — so the applet
 	// teardown in SetCloseIntercept still runs. Adding one here would
@@ -794,7 +819,7 @@ func (h *host) buildMenu() {
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About "+ui.DefaultAppName+"…", h.showAbout),
 	)
-	h.win.SetMainMenu(fyne.NewMainMenu(file, sessionMenu, vaultMenu, helpMenu))
+	h.win.SetMainMenu(fyne.NewMainMenu(file, sessionMenu, vaultMenu, opsMenu, helpMenu))
 }
 
 func (h *host) currentTerminal() *ui.Session {
@@ -836,16 +861,51 @@ func (h *host) openFileTransfer() {
 		dialog.ShowInformation("File Transfer", "Open an SSH terminal session first.", h.win)
 		return
 	}
+	title := "SFTP"
+	if inst := h.shell.Current(); inst != nil {
+		title = "SFTP — " + inst.Title()
+	}
+	h.openSFTPTab(sess, title)
+}
+
+func (h *host) openSFTPTab(sess *ui.Session, title string) {
 	client, ok := sess.SSHClient()
 	if !ok || client == nil {
 		dialog.ShowInformation("File Transfer", "SFTP requires an SSH session (not telnet or serial).", h.win)
 		return
 	}
-	title := "File Transfer (SFTP)"
-	if inst := h.shell.Current(); inst != nil {
-		title = "Files — " + inst.Title()
+	view, err := ui.NewSFTPView(h.win, client)
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		return
 	}
-	ui.ShowSFTPDialog(h.win, title, client)
+	if title == "" {
+		title = "SFTP"
+	}
+	h.shell.Open(ui.Mount{
+		Kind:   ui.KindSFTP,
+		Title:  title,
+		Applet: view,
+		Busy:   func() string { return "" },
+	})
+}
+
+func (h *host) openPortForwards() {
+	sess := h.currentTerminal()
+	if sess == nil {
+		dialog.ShowInformation("Port forwards", "Open an SSH terminal session first.", h.win)
+		return
+	}
+	client, ok := sess.SSHClient()
+	if !ok || client == nil {
+		dialog.ShowInformation("Port forwards", "Port forwards require an SSH session.", h.win)
+		return
+	}
+	title := "Port forwards"
+	if inst := h.shell.Current(); inst != nil {
+		title = "Port forwards — " + inst.Title()
+	}
+	ui.ShowPortForwardDialog(h.win, title, client, h.forwards)
 }
 
 func (h *host) loadScripts() scripts.File {
@@ -1085,53 +1145,215 @@ func (h *host) importSecureCRT() {
 	}()
 }
 
-// installButtonBar loads ~/.pathfinderssh/buttons.yaml and puts send actions
-// on the shell toolbar. Scope "all" fans out to every open terminal tab.
-func (h *host) installButtonBar() {
+// installButtonBar is folded into installOpsStrip (bottom chrome).
+func (h *host) installButtonBar() {}
+
+func (h *host) installOpsStrip() {
 	path := buttons.Path(ui.GetAppHome())
 	f, err := buttons.Load(path)
 	if err != nil {
 		log.Printf("[buttons] %v", err)
-		return
+		f = buttons.Defaults()
 	}
-	if len(f.Buttons) == 0 {
-		return
+	if len(f.Buttons) > 0 {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			_ = buttons.Save(path, f)
+		}
 	}
-	// Persist defaults on first run so the file is discoverable.
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		_ = buttons.Save(path, f)
-	}
-	menuItems := make([]*fyne.MenuItem, 0, len(f.Buttons)+2)
-	for _, b := range f.Buttons {
-		b := b
-		menuItems = append(menuItems, fyne.NewMenuItem(b.Label, func() {
-			h.sendButton(b)
+	parts := []fyne.CanvasObject{}
+	if len(f.Buttons) > 0 {
+		parts = append(parts, ui.NewButtonBar(ui.ButtonBarOptions{
+			Buttons: f.Buttons,
+			OnSend:  func(b buttons.Button, all bool) { h.sendButtonScoped(b, all) },
+			OnEdit: func() {
+				dialog.ShowInformation("Button bar", "Edit "+path+" and restart Pathfinder.\nUse \\n for Return.", h.win)
+			},
 		}))
 	}
-	menuItems = append(menuItems, fyne.NewMenuItemSeparator())
-	menuItems = append(menuItems, fyne.NewMenuItem("Edit buttons.yaml…", func() {
-		dialog.ShowInformation("Button bar", "Edit "+path+" and restart Pathfinder.\nUse \\n for Return.", h.win)
+	parts = append(parts, ui.NewOpsStrip(ui.OpsStripOptions{
+		Customers: h.customerNames(),
+		OnConnect: func(hostName, user string, port int) {
+			n := sessions.Defaults()
+			n.Ephemeral = true
+			n.Host = hostName
+			if user != "" {
+				n.Username = user
+			}
+			if port > 0 {
+				n.Port = port
+			}
+			h.connect("", "", n, nil)
+		},
+		OnSendChat: func(text string, mode ui.ChatSendMode, customer string) {
+			h.sendChat(text, mode, customer)
+		},
 	}))
-	btn := ui.TipButtonLabeled("Buttons", theme.MailSendIcon(), nil)
-	btn.OnTapped = func() {
-		m := fyne.NewMenu("", menuItems...)
-		widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
+	h.shell.SetBottom(container.NewVBox(parts...))
+}
+
+func (h *host) sendChat(text string, mode ui.ChatSendMode, customer string) {
+	switch mode {
+	case ui.ChatSendAll:
+		h.confirmFanOut("Send to all open terminals?", func() {
+			h.shell.SendToAllTerminals(text)
+		})
+	case ui.ChatSendCustomer:
+		cust := customer
+		h.confirmFanOut("Send to all open terminals for customer "+cust+"?", func() {
+			h.shell.SendToMatching(text, func(meta ui.TerminalMeta) bool {
+				return strings.EqualFold(meta.CustomerName(), cust)
+			})
+		})
+	default:
+		h.shell.SendToActive(text)
 	}
-	btn.Importance = widget.LowImportance
-	btn.SetToolTip("Send button-bar macros to the terminal")
-	h.shell.AddToolbar(btn)
+}
+
+func (h *host) confirmFanOut(msg string, do func()) {
+	if !h.guardedSend {
+		do()
+		return
+	}
+	dialog.ShowConfirm("Guarded send", msg, func(ok bool) {
+		if ok {
+			do()
+		}
+	}, h.win)
 }
 
 func (h *host) sendButton(b buttons.Button) {
+	h.sendButtonScoped(b, strings.EqualFold(b.Scope, "all"))
+}
+
+func (h *host) sendButtonScoped(b buttons.Button, all bool) {
 	text := b.Send
 	if text == "" {
 		return
 	}
-	if strings.EqualFold(b.Scope, "all") {
-		h.shell.SendToAllTerminals(text)
+	if all {
+		h.confirmFanOut("Send button \""+b.Label+"\" to all open terminals?", func() {
+			h.shell.SendToAllTerminals(text)
+		})
 		return
 	}
 	h.shell.SendToActive(text)
+}
+
+func (h *host) installShortcuts() {
+	c := h.win.Canvas()
+	add := func(key fyne.KeyName, mod fyne.KeyModifier, fn func()) {
+		sc := &desktop.CustomShortcut{KeyName: key, Modifier: mod}
+		c.AddShortcut(sc, func(fyne.Shortcut) { fn() })
+	}
+	add(fyne.KeyW, fyne.KeyModifierControl, func() {
+		h.shell.CloseCurrent()
+	})
+	add(fyne.KeyTab, fyne.KeyModifierControl, func() {
+		h.shell.SelectNextTab()
+	})
+	add(fyne.KeyTab, fyne.KeyModifierControl|fyne.KeyModifierShift, func() {
+		h.shell.SelectPrevTab()
+	})
+	add(fyne.KeyL, fyne.KeyModifierControl, func() {
+		// Focus tree filter when present.
+		if h.tree != nil {
+			h.tree.FocusFilter()
+		}
+	})
+}
+
+func (h *host) toggleGuardedSend() {
+	h.guardedSend = !h.guardedSend
+	state := "off"
+	if h.guardedSend {
+		state = "on"
+	}
+	dialog.ShowInformation("Guarded multi-send", "Confirm before Send to all / customer is now "+state+".", h.win)
+}
+
+func (h *host) packTicketEvidence() {
+	ticket := widget.NewEntry()
+	ticket.SetPlaceHolder("ticket / change ID")
+	dialog.ShowForm("Pack ticket evidence", "Save zip…", "Cancel", []*widget.FormItem{
+		{Text: "Ticket", Widget: ticket},
+	}, func(ok bool) {
+		if !ok {
+			return
+		}
+		var files []evidence.File
+		for _, inst := range h.shell.Instances() {
+			if inst == nil {
+				continue
+			}
+			ta, ok := inst.Applet().(*termApplet)
+			if !ok || ta.sess == nil {
+				continue
+			}
+			text := ta.sess.ScrollbackText()
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			files = append(files, evidence.File{
+				Name:    inst.Title() + ".txt",
+				Content: []byte(text),
+			})
+		}
+		if len(files) == 0 {
+			dialog.ShowInformation("Evidence pack", "No open terminals with scrollback.", h.win)
+			return
+		}
+		suggested := filepath.Join(ui.GetLogsDir(), "evidence-"+time.Now().Format("20060102-150405")+".zip")
+		save := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			if wc == nil {
+				return
+			}
+			path := wc.URI().Path()
+			_ = wc.Close()
+			if err := evidence.WriteZip(path, ticket.Text, files); err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			dialog.ShowInformation("Evidence pack", fmt.Sprintf("Wrote %d scrollback(s) to %s", len(files), path), h.win)
+		}, h.win)
+		save.SetFileName(filepath.Base(suggested))
+		save.Resize(fyne.NewSize(820, 600))
+		save.Show()
+	}, h.win)
+}
+
+func (h *host) syncPSACustomers() {
+	src := psasync.StubSource{}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	list, err := src.ListCustomers(ctx)
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	tr := h.tree.Tree()
+	root := product.CustomersRoot
+	res := psasync.SyncFolderNames(root, list, func(name string) (string, error) {
+		path, err := (&tr).CreateCustomer(root, name)
+		if err != nil {
+			if strings.Contains(err.Error(), "already exists") {
+				return "", nil
+			}
+			return "", err
+		}
+		return path, nil
+	})
+	res.Source = src.Name()
+	h.tree.SetTree(tr)
+	h.saveTree(tr)
+	msg := fmt.Sprintf("Source: %s\nCreated: %d\nAlready present: %d", res.Source, len(res.Created), len(res.Existing))
+	if len(res.Errors) > 0 {
+		msg += "\nErrors: " + strings.Join(res.Errors, "; ")
+	}
+	dialog.ShowInformation("PSA sync (stub)", msg+"\n\nWire a real PSA Source in internal/psasync for production.", h.win)
 }
 
 // importMap turns a crawl's map.json into sessions under Customers/<name>/….
@@ -1282,7 +1504,10 @@ func (h *host) applyImport(tr sessions.Tree, format sessions.Format, sum session
 	case sessions.FormatMap:
 		msg += "\n\nSessions were filed under Customers/<customer>/<folder>."
 	default:
-		// SecureCRT and other organised imports already explain in their wizards.
+		msg += "\n\nRe-import merges by address: existing sessions stay, only new ones are added."
+		if sum.Skipped > 0 && sum.Added == 0 {
+			msg += "\nTip: choose Replace inventory in the SecureCRT wizard to start fresh."
+		}
 	}
 	dialog.ShowInformation("Imported "+format.String(), msg, h.win)
 }
@@ -1499,12 +1724,15 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 		sess.PromptSaveScrollback()
 	})
 	filesBtn := ui.TipIconButtonLow("Transfer files over SFTP on this SSH session", theme.FolderOpenIcon(), func() {
+		h.openSFTPTab(sess, "SFTP — "+n.Label())
+	})
+	fwdBtn := ui.TipIconButtonLow("SSH port forwards (local / remote / SOCKS)", theme.VisibilityIcon(), func() {
 		client, ok := sess.SSHClient()
 		if !ok || client == nil {
-			dialog.ShowInformation("File Transfer", "SFTP requires an SSH session (not telnet or serial).", h.win)
+			dialog.ShowInformation("Port forwards", "Port forwards require an SSH session.", h.win)
 			return
 		}
-		ui.ShowSFTPDialog(h.win, "Files — "+n.Label(), client)
+		ui.ShowPortForwardDialog(h.win, "Port forwards — "+n.Label(), client, h.forwards)
 	})
 	scriptBtn := ui.TipIconButtonLow("Run a YAML script into this terminal", theme.DocumentIcon(), h.runScriptDialog)
 	refreshCaptureTip := func() {
@@ -1525,12 +1753,23 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 	}
 	refreshCaptureTip()
 
+	folder := ""
+	if f, ok := h.folderFor(n); ok {
+		folder = f
+	}
+	customer := sessions.CustomerOfFolder(folder)
+
 	inst := h.shell.Open(ui.Mount{
-		Kind:   ui.KindTerminal,
-		Title:  n.Label(),
-		Applet: &termApplet{content: content, sess: sess},
-		Focus:  sess,
-		Actions: []fyne.CanvasObject{filesBtn, scriptBtn, captureBtn, saveBtn},
+		Kind:  ui.KindTerminal,
+		Title: n.Label(),
+		Applet: &termApplet{
+			content:  content,
+			sess:     sess,
+			folder:   folder,
+			customer: customer,
+		},
+		Focus:   sess,
+		Actions: []fyne.CanvasObject{filesBtn, fwdBtn, scriptBtn, captureBtn, saveBtn},
 		// The terminal resolves its own canvas for focus-on-click and for
 		// its context menu, and the driver's cache cannot tell it that it
 		// has moved. Without this a detached session goes deaf on the
@@ -1599,13 +1838,28 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 // repaints from its read loop -- so Start and Stop are genuinely nothing, and
 // the teardown that matters is the Mount's OnClose.
 type termApplet struct {
-	content fyne.CanvasObject
-	sess    *ui.Session
+	content  fyne.CanvasObject
+	sess     *ui.Session
+	folder   string
+	customer string
 }
 
 func (t *termApplet) Content() fyne.CanvasObject { return t.content }
 func (t *termApplet) Start()                     {}
 func (t *termApplet) Stop()                      {}
+
+func (t *termApplet) FolderPath() string {
+	if t == nil {
+		return ""
+	}
+	return t.folder
+}
+func (t *termApplet) CustomerName() string {
+	if t == nil {
+		return ""
+	}
+	return t.customer
+}
 
 // SendBytes implements the button-bar / send-to-all hook.
 func (t *termApplet) SendBytes(b []byte) {

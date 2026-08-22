@@ -205,6 +205,8 @@ type Shell struct {
 	content    *fyne.Container
 	split      *container.Split
 	body       fyne.CanvasObject
+	// bottom is the shared strip under the tabs (button bar, chat, etc.).
+	bottom fyne.CanvasObject
 }
 
 // NewShell builds the shell. Call it after app.New(): it constructs widgets,
@@ -244,8 +246,25 @@ func NewShell(a fyne.App, w fyne.Window) *Shell {
 	top := container.NewBorder(nil, nil, s.bar, nil, s.summary)
 
 	s.body = s.tabs
+	// Border object order: center, top, bottom, left, right. Bottom starts empty;
+	// SetBottom fills Objects[2] without rebuilding (window already holds Content).
 	s.content = container.NewBorder(top, nil, nil, nil, s.body)
 	return s
+}
+
+// SetBottom docks an object under the tabs (SecureCRT-style button bar / chat).
+// Passing nil clears it.
+func (s *Shell) SetBottom(obj fyne.CanvasObject) {
+	if s == nil || s.content == nil {
+		return
+	}
+	s.bottom = obj
+	// NewBorder stores: [0]=center, [1]=top, [2]=bottom, [3]=left, [4]=right
+	for len(s.content.Objects) < 3 {
+		s.content.Objects = append(s.content.Objects, nil)
+	}
+	s.content.Objects[2] = obj
+	s.content.Refresh()
 }
 
 // SetSide docks an object down the left of the window, beside the tabs.
@@ -913,6 +932,19 @@ func (s *Shell) SendToActive(text string) {
 
 // SendToAllTerminals writes text to every open terminal tab (button scope=all).
 func (s *Shell) SendToAllTerminals(text string) {
+	s.SendToMatching(text, nil)
+}
+
+// TerminalMeta is optional folder/customer metadata a terminal applet may expose
+// so the shell can fan out to a customer without knowing MSP layout rules.
+type TerminalMeta interface {
+	FolderPath() string
+	CustomerName() string
+}
+
+// SendToMatching writes text to every open terminal whose match returns true.
+// A nil match sends to all terminals (same as SendToAllTerminals).
+func (s *Shell) SendToMatching(text string, match func(meta TerminalMeta) bool) {
 	if s == nil || text == "" {
 		return
 	}
@@ -921,10 +953,41 @@ func (s *Shell) SendToAllTerminals(text string) {
 		if i == nil || i.mount.Kind != KindTerminal {
 			continue
 		}
+		if match != nil {
+			meta, ok := i.mount.Applet.(TerminalMeta)
+			if !ok || !match(meta) {
+				continue
+			}
+		}
 		if x, ok := i.mount.Applet.(sender); ok {
 			x.SendBytes([]byte(text))
 		}
 	}
+}
+
+// SelectNextTab / SelectPrevTab cycle docked tabs (Ctrl+Tab / Ctrl+Shift+Tab).
+func (s *Shell) SelectNextTab() { s.cycleTab(1) }
+func (s *Shell) SelectPrevTab() { s.cycleTab(-1) }
+
+func (s *Shell) cycleTab(delta int) {
+	if s == nil || s.tabs == nil {
+		return
+	}
+	items := s.tabs.Items
+	if len(items) == 0 {
+		return
+	}
+	cur := s.tabs.Selected()
+	idx := 0
+	for i, it := range items {
+		if it == cur {
+			idx = i
+			break
+		}
+	}
+	n := len(items)
+	idx = (idx + delta%n + n) % n
+	s.tabs.Select(items[idx])
 }
 
 // CloseCurrent closes the selected tab. No-op when nothing is docked.

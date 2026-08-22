@@ -1,8 +1,8 @@
 # Pathfinder — Frontend Polish & SecureCRT-Replacement Roadmap
 
-**Status (AgenticOp track):** Phase A partial · Phase B SecureCRT import **shipped** · Phase C button bar + SFTP library **shipped** · GUI rebuild on AgenticOps products  
+**Status (AgenticOp track):** Phase A–C P0 CRT gaps + MSP ops scaffolding **shipped** on `feature/crt-frontend-roadmap`  
 
-Work lives on branch `feature/crt-frontend-roadmap` → https://github.com/AgenticOp-io/pathfinderssh  
+Work lives on branch `feature/crt-frontend-roadmap` → https://github.com/AgenticOp-io/pathfinderssh-msp  
 
 ---
 
@@ -10,47 +10,30 @@ Work lives on branch `feature/crt-frontend-roadmap` → https://github.com/Agent
 
 | Item | Where |
 | --- | --- |
-| SecureCRT importer (no passwords) | `internal/crtimport`, `pfseed import-securecrt` |
-| CSV import (VanDyke headers) | `pfseed import-csv` |
-| Path-encoded deep folders (`A / B / C`) | CRT import → `sessions.yaml` folders |
-| Folder session counts in tree | `internal/ui/treemodel.go` |
-| Recent-session touch on activate | `internal/recent` + host |
-| Button bar (`buttons.yaml`, active/all) | `internal/buttons` + shell SendTo* |
-| SFTP file transfer UI | Session → Transfer files / tab Files action |
-| YAML session scripts | `internal/scripts` + Scripts toolbar |
+| Persistent button bar (bottom strip + All-tabs arm) | `internal/ui/buttonbar.go` + shell `SetBottom` |
+| Quick Connect + armable Send chat (active / all / customer) | `internal/ui/opsstrip.go` |
+| Keyboard shortcuts Ctrl+W / Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+L | `installShortcuts` |
+| Session tree filter focus (Ctrl+L) | `SessionTree.FocusFilter` |
+| SFTP as DocTabs applet | `KindSFTP` + `NewSFTPView` |
+| Port-forward UI (local / remote / SOCKS5) | `internal/portfwd` + `portfwddialog.go` |
+| Send-to-customer + guarded multi-send | shell `SendToMatching` + Ops menu |
+| Per-customer vault tag hint (`customer:Name`) | vault manager + `sessions.CustomerTag` |
+| Ticket evidence pack (zip scrollbacks) | `internal/evidence` + Session menu |
+| PSA → Customers sync scaffold | `internal/psasync` + Ops menu stub |
+| CRT re-import merge feedback | `applyImport` messaging |
 
-| File → Import SecureCRT | `cmd/pathfinder` |
-| First-run SecureCRT import | in-app dialog (`pathfinder.exe`) |
-| App install / shortcuts | `pathfinder.exe` / `-install` (no START.bat) |
+| SecureCRT importer / CSV / nested folders / maps / vault | earlier on this branch |
 
-| Rebuilt `pathfinder.exe` + `pfseed.exe` | `products/pathfinder/windows/` |
+## Still open
 
-Verified dry-run on this machine: **786** importable / **19** skipped / **206** folders from VanDyke Config.
-
-## Still open (continue on same branch)
-
-### Phase A polish
-- Recent strip UI in the tree panel (persistence is done)
-- Quick Connect compact bar
-- Session form progressive disclosure
-- Keyboard shortcuts (Ctrl+W / Ctrl+Tab)
-- Discovery actions overflow grouping
-
-### Phase B
-- True nested folders (B2a) — **done**: sessions.yaml v2, recursive tree UI, CRT import nests Customers → site → vendor
-- Re-import merge UX feedback in wizard
-
-### Phase C
-- SFTP side-panel applet (library ready)
-- Port-forward UI
-- Armable send-to-all chat box (button scope=all works)
+- Script recorder + Python scripting
+- Tiled multi-session layout
 - Windows SSH agent named pipe
-
-### Phase D
-- Crawl from selected folder / tags
-- Map click jump-path preservation
+- Real PSA adapters (ConnectWise / Autotask / …)
+- Read-only / change-window policy engine beyond guarded send
+- Crawl confidence scoring UI
+- Recent strip UI in the tree panel
 
 ---
 
 (Original roadmap body follows for reference.)
-
