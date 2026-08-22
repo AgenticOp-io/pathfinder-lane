@@ -31,7 +31,7 @@ func ProbeTCP(host string, port int, timeout time.Duration) error {
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.Dial("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("not reachable (%s): %w", addr, err)
+		return Humanize(fmt.Errorf("%s is not reachable: %w", addr, err))
 	}
 	_ = conn.Close()
 	return nil

@@ -40,6 +40,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	ttwidget "github.com/dweymouth/fyne-tooltip/widget"
@@ -201,10 +202,28 @@ type Shell struct {
 
 	// focusWatch stops the keyboard-focus watchdog. See StartFocusWatch.
 	focusWatch chan struct{}
-	bar        *fyne.Container
+	topBar     fyne.CanvasObject
+	topSlot    *fyne.Container
 	content    *fyne.Container
 	split      *container.Split
+	rightSplit *container.Split
 	body       fyne.CanvasObject
+	leftPanel  fyne.CanvasObject
+	rightPanel fyne.CanvasObject
+	leftOffset float64
+	rightOffset float64
+	// bottom is the shared strip under the tabs (button bar, chat, etc.).
+	bottom fyne.CanvasObject
+
+	// tiled is true when docked terminals are shown in a grid instead of tabs.
+	tiled     bool
+	tileGrid  *fyne.Container
+	tileRoots map[int]fyne.CanvasObject // instance id → root while tiled
+	tileCells map[int]*tileCell         // focus ring + header per pane
+
+	// lastTerminal is the most recently selected SSH tab; used when DocTabs has
+	// no selection (tiled layout) or a non-terminal tab is selected.
+	lastTerminal *Instance
 }
 
 // NewShell builds the shell. Call it after app.New(): it constructs widgets,
@@ -240,12 +259,321 @@ func NewShell(a fyne.App, w fyne.Window) *Shell {
 	}
 
 	s.summary = widget.NewLabel("Nothing open — use Launch")
-	s.bar = container.NewHBox()
-	top := container.NewBorder(nil, nil, s.bar, nil, s.summary)
+	s.summary.Importance = widget.LowImportance
+	s.topSlot = container.NewMax()
+	s.topBar = container.NewMax(s.topSlot)
 
 	s.body = s.tabs
-	s.content = container.NewBorder(top, nil, nil, nil, s.body)
+	s.content = container.NewBorder(s.topBar, nil, nil, nil, s.body)
+	s.tileRoots = map[int]fyne.CanvasObject{}
+	s.tileCells = map[int]*tileCell{}
 	return s
+}
+
+// SetBottom docks an object under the tabs (SecureCRT-style button bar / chat).
+// Passing nil clears it. Fyne border layout panics if nil appears in Objects.
+func (s *Shell) SetBottom(obj fyne.CanvasObject) {
+	if s == nil || s.content == nil {
+		return
+	}
+	s.bottom = obj
+	s.syncContentBorder()
+}
+
+func (s *Shell) syncContentBorder() {
+	center := s.body
+	objs := []fyne.CanvasObject{center}
+	if s.topBar != nil {
+		objs = append(objs, s.topBar)
+	}
+	if s.bottom != nil {
+		objs = append(objs, s.bottom)
+	}
+	s.content.Layout = layout.NewBorderLayout(s.topBar, s.bottom, nil, nil)
+	s.content.Objects = objs
+	s.content.Refresh()
+}
+
+// RefocusCurrentTerminal returns keyboard focus to the active SSH tab after a
+// chrome change. Must not call settle() (size polling / ResyncSize).
+//
+// Critical: never focus while a canvas overlay is up. Focusing content under a
+// dialog puts the widget in the content focus manager while keys still go to
+// the overlay manager — the terminal then looks permanently dead.
+func (s *Shell) RefocusCurrentTerminal() {
+	if s == nil {
+		return
+	}
+	cur := s.ActiveTerminal()
+	if cur == nil || cur.mount.Focus == nil || cur.closed.Load() {
+		return
+	}
+	focus := cur.mount.Focus
+	fyne.Do(func() {
+		if cur.closed.Load() {
+			return
+		}
+		c := cur.canvas()
+		if c == nil || len(c.Overlays().List()) > 0 {
+			return
+		}
+		if g, ok := focus.(interface{ GrabFocus() bool }); ok {
+			g.GrabFocus()
+			return
+		}
+		c.Focus(focus)
+	})
+}
+
+// EnsureTerminalFocus forcibly focuses the active SSH tab once canvas overlays
+// have cleared. Use after connect: settle() may have given up while the
+// Connecting dialog was up, and reclaimFocus will not steal keys back from the
+// session tree — leaving a live prompt that ignores the keyboard.
+func (s *Shell) EnsureTerminalFocus() {
+	if s == nil {
+		return
+	}
+	go func() {
+		// Longer budget: Connecting Hide + chrome Show/Hide can take >2s on
+		// Windows ARM before overlays are actually gone.
+		for attempt := 0; attempt < 80; attempt++ {
+			time.Sleep(50 * time.Millisecond)
+			ok := make(chan bool, 1)
+			fyne.Do(func() {
+				cur := s.ActiveTerminal()
+				if cur == nil || cur.mount.Focus == nil || cur.closed.Load() {
+					ok <- false
+					return
+				}
+				c := cur.canvas()
+				if c == nil || len(c.Overlays().List()) > 0 {
+					ok <- false
+					return
+				}
+				focus := cur.mount.Focus
+				// Always nil-then-focus so we do not trust a stale "already
+				// focused" reading from under the Connecting overlay.
+				c.Focus(nil)
+				if g, okGrab := focus.(interface{ GrabFocus() bool }); okGrab {
+					ok <- g.GrabFocus() && c.Focused() == focus
+					return
+				}
+				c.Focus(focus)
+				ok <- c.Focused() == focus
+			})
+			if <-ok {
+				return
+			}
+		}
+	}()
+}
+
+// Tiled reports whether docked terminals are shown in a grid.
+func (s *Shell) Tiled() bool { return s != nil && s.tiled }
+
+// ToggleTileLayout switches docked terminals between DocTabs and a 2-column grid.
+func (s *Shell) ToggleTileLayout() {
+	if s == nil {
+		return
+	}
+	if s.tiled {
+		s.untile()
+		return
+	}
+	s.tile()
+}
+
+func (s *Shell) tile() {
+	terms := make([]*Instance, 0)
+	for _, inst := range s.instances() {
+		if inst == nil || inst.closed.Load() || inst.mount.Kind != KindTerminal || inst.win != nil {
+			continue
+		}
+		terms = append(terms, inst)
+	}
+	if len(terms) < 2 {
+		return
+	}
+	s.tiled = true
+	s.tileRoots = map[int]fyne.CanvasObject{}
+	s.tileCells = map[int]*tileCell{}
+	cells := make([]fyne.CanvasObject, 0, len(terms))
+	var side fyne.CanvasObject
+	off := 0.25
+	if s.split != nil {
+		side = s.split.Leading
+		off = s.split.Offset
+	}
+	for _, inst := range terms {
+		if inst.tab != nil {
+			s.releaseTab(inst.tab)
+			inst.tab = nil
+		}
+		s.tileRoots[inst.info.ID] = inst.root
+		tc := newTileCell(s, inst)
+		s.tileCells[inst.info.ID] = tc
+		cells = append(cells, tc.root)
+	}
+	if s.lastTerminal == nil {
+		s.lastTerminal = terms[0]
+	}
+	s.tileGrid = buildTileGrid(cells)
+	if side != nil {
+		s.split = container.NewHSplit(side, s.tileGrid)
+		s.split.SetOffset(off)
+		s.body = s.split
+	} else {
+		s.split = nil
+		s.body = s.tileGrid
+	}
+	s.applyBody()
+	s.refreshTileFocus()
+	s.refreshSummary()
+}
+
+func (s *Shell) untile() {
+	if !s.tiled {
+		return
+	}
+	s.tiled = false
+	var side fyne.CanvasObject
+	off := 0.25
+	if s.split != nil {
+		side = s.split.Leading
+		off = s.split.Offset
+	}
+	for _, inst := range s.instances() {
+		if inst == nil || inst.win != nil {
+			continue
+		}
+		if _, ok := s.tileRoots[inst.info.ID]; !ok {
+			continue
+		}
+		inst.tab = container.NewTabItem(inst.info.Title, inst.root)
+		s.tabs.Append(inst.tab)
+	}
+	s.tileRoots = map[int]fyne.CanvasObject{}
+	s.tileCells = map[int]*tileCell{}
+	s.tileGrid = nil
+	if side != nil {
+		s.split = container.NewHSplit(side, s.tabs)
+		s.split.SetOffset(off)
+		s.body = s.split
+	} else {
+		s.split = nil
+		s.body = s.tabs
+	}
+	s.applyBody()
+	s.refreshSummary()
+}
+
+func (s *Shell) applyBody() {
+	if s.content == nil || len(s.content.Objects) == 0 {
+		return
+	}
+	s.content.Objects[0] = s.body
+	s.content.Refresh()
+}
+
+func buildTileGrid(cells []fyne.CanvasObject) *fyne.Container {
+	if len(cells) == 0 {
+		return container.NewMax()
+	}
+	if len(cells) == 1 {
+		return container.NewMax(cells[0])
+	}
+	if len(cells) == 2 {
+		sp := container.NewHSplit(cells[0], cells[1])
+		sp.SetOffset(0.5)
+		return container.NewMax(sp)
+	}
+	rows := make([]fyne.CanvasObject, 0)
+	for i := 0; i < len(cells); i += 2 {
+		if i+1 < len(cells) {
+			sp := container.NewHSplit(cells[i], cells[i+1])
+			sp.SetOffset(0.5)
+			rows = append(rows, sp)
+		} else {
+			rows = append(rows, cells[i])
+		}
+	}
+	if len(rows) == 1 {
+		return container.NewMax(rows[0])
+	}
+	root := rows[0]
+	for i := 1; i < len(rows); i++ {
+		sp := container.NewVSplit(root, rows[i])
+		sp.SetOffset(0.5)
+		root = sp
+	}
+	return container.NewMax(root)
+}
+
+// activateTile selects a pane in tiled layout and focuses its terminal.
+func (s *Shell) activateTile(inst *Instance) {
+	if s == nil || inst == nil || !s.tiled || inst.closed.Load() {
+		return
+	}
+	if inst.mount.Kind != KindTerminal {
+		return
+	}
+	s.lastTerminal = inst
+	s.refreshTileFocus()
+	inst.settle()
+}
+
+func (s *Shell) refreshTileFocus() {
+	if s == nil || !s.tiled {
+		return
+	}
+	active := s.ActiveTerminal()
+	activeID := 0
+	if active != nil {
+		activeID = active.info.ID
+	}
+	for id, tc := range s.tileCells {
+		tc.setActive(id == activeID)
+	}
+}
+
+// tiledTerminals returns docked SSH instances in stable registry order.
+func (s *Shell) tiledTerminals() []*Instance {
+	if s == nil {
+		return nil
+	}
+	var out []*Instance
+	for _, info := range s.reg.All() {
+		inst := s.byID[info.ID]
+		if inst == nil || inst.closed.Load() || inst.win != nil {
+			continue
+		}
+		if inst.mount.Kind != KindTerminal {
+			continue
+		}
+		if _, ok := s.tileRoots[inst.info.ID]; !ok {
+			continue
+		}
+		out = append(out, inst)
+	}
+	return out
+}
+
+func (s *Shell) cycleTile(delta int) {
+	terms := s.tiledTerminals()
+	if len(terms) == 0 {
+		return
+	}
+	cur := s.ActiveTerminal()
+	idx := 0
+	for i, t := range terms {
+		if t == cur {
+			idx = i
+			break
+		}
+	}
+	n := len(terms)
+	next := terms[(idx+delta%n+n)%n]
+	s.activateTile(next)
 }
 
 // SetSide docks an object down the left of the window, beside the tabs.
@@ -258,27 +586,71 @@ func NewShell(a fyne.App, w fyne.Window) *Shell {
 // Calling it a second time replaces the side. Passing nil removes it and
 // returns the tabs to full width, which is what a "hide the tree" toggle needs.
 func (s *Shell) SetSide(obj fyne.CanvasObject, offset float64) {
-	if obj == nil {
-		s.split = nil
-		s.body = s.tabs
-	} else {
+	s.leftPanel = obj
+	if offset > 0 {
 		if offset < 0.1 {
 			offset = 0.1
 		}
 		if offset > 0.6 {
 			offset = 0.6
 		}
-		s.split = container.NewHSplit(obj, s.tabs)
-		s.split.SetOffset(offset)
-		s.body = s.split
+		s.leftOffset = offset
 	}
+	s.rebuildBody()
+}
 
-	// container.NewBorder appends the middle object FIRST and then the edges,
-	// so index 0 is the body and the toolbar the layout holds by reference is
-	// untouched. Swapping one element beats rebuilding the container, which
-	// would re-parent the toolbar and the summary label for no reason.
-	s.content.Objects[0] = s.body
-	s.content.Refresh()
+// SetRight docks an object to the right of the tab strip (e.g. Cursor AI pane).
+func (s *Shell) SetRight(obj fyne.CanvasObject, offset float64) {
+	s.rightPanel = obj
+	if offset > 0 {
+		if offset < 0.55 {
+			offset = 0.55
+		}
+		if offset > 0.9 {
+			offset = 0.9
+		}
+		s.rightOffset = offset
+	}
+	s.rebuildBody()
+}
+
+// RightOffset is the splitter position for the right pane, or 0 when hidden.
+func (s *Shell) RightOffset() float64 {
+	if s.rightSplit == nil {
+		return 0
+	}
+	return s.rightSplit.Offset
+}
+
+func (s *Shell) rebuildBody() {
+	center := fyne.CanvasObject(s.tabs)
+	if s.rightPanel != nil {
+		off := s.rightOffset
+		if off <= 0 || off >= 1 {
+			off = 0.72
+		}
+		s.rightSplit = container.NewHSplit(center, s.rightPanel)
+		s.rightSplit.SetOffset(off)
+		center = s.rightSplit
+	} else {
+		s.rightSplit = nil
+	}
+	if s.leftPanel != nil {
+		off := s.leftOffset
+		if off <= 0 || off >= 1 {
+			off = 0.25
+		}
+		s.split = container.NewHSplit(s.leftPanel, center)
+		s.split.SetOffset(off)
+		s.body = s.split
+	} else {
+		s.split = nil
+		s.body = center
+	}
+	if s.content != nil {
+		s.content.Objects[0] = s.body
+		s.content.Refresh()
+	}
 }
 
 // SideOffset is where the splitter currently sits, or 0 with no side panel.
@@ -302,28 +674,23 @@ func (s *Shell) Window() fyne.Window { return s.win }
 // "quit with sessions open?" prompt. Safe from any goroutine.
 func (s *Shell) Registry() *Registry { return s.reg }
 
-// AddLauncher puts a button in the toolbar. The host supplies the function,
-// which is what keeps dialers and dialogs out of this file.
-func (s *Shell) AddLauncher(label string, icon fyne.Resource, fn func()) {
-	var b fyne.CanvasObject
-	if icon != nil {
-		b = TipButtonLabeled(label, icon, fn)
-	} else {
-		b = widget.NewButton(label, fn)
+// SummaryLabel is the status line (open tabs); host docks it in the bottom chrome.
+func (s *Shell) SummaryLabel() *widget.Label { return s.summary }
+// SetTopChrome installs the slim toolbar (Connect, Crawl, …, Menu).
+func (s *Shell) SetTopChrome(obj fyne.CanvasObject) {
+	if s == nil || s.topSlot == nil {
+		return
 	}
-	s.bar.Add(b)
-	s.bar.Refresh()
+	if obj == nil {
+		s.topSlot.Objects = nil
+	} else {
+		s.topSlot.Objects = []fyne.CanvasObject{obj}
+	}
+	s.topSlot.Refresh()
 }
 
-// AddToolbar puts an arbitrary object in the toolbar, after the launchers.
-//
-// For status and state that is not a launch — a vault lock indicator, a
-// connection count. The shell places it and never touches it again; the caller
-// keeps the reference and updates it.
-func (s *Shell) AddToolbar(obj fyne.CanvasObject) {
-	s.bar.Add(obj)
-	s.bar.Refresh()
-}
+// SetRibbon is an alias for SetTopChrome.
+func (s *Shell) SetRibbon(obj fyne.CanvasObject) { s.SetTopChrome(obj) }
 
 // Open mounts an applet as a new tab and returns its instance.
 //
@@ -365,6 +732,9 @@ func (s *Shell) Open(m Mount) *Instance {
 	s.byID[info.ID] = inst
 	s.tabs.Append(inst.tab)
 	s.tabs.Select(inst.tab)
+	if m.Kind == KindTerminal {
+		s.lastTerminal = inst
+	}
 	s.refreshSummary()
 	inst.settle()
 	return inst
@@ -585,15 +955,41 @@ func (i *Instance) reclaimFocus() {
 		return
 	}
 	c := i.canvas()
-	if c == nil || c.Focused() != nil {
+	if c == nil {
 		return
 	}
-	// Only the instance the person is actually looking at. A backgrounded tab
-	// answering a vacuum would steal keys from the visible one.
+	if len(c.Overlays().List()) > 0 {
+		return
+	}
+	// Only the instance the person is actually looking at.
 	if i.win == nil && i.shell.tabs.Selected() != i.tab {
 		return
 	}
+	cur := c.Focused()
+	if cur == i.mount.Focus {
+		// Already on the terminal. Do NOT Focus(nil)/Focus again on every
+		// watchdog tick — that thrash was fighting the paint path and made
+		// remote echo look minutes late.
+		return
+	}
+	// Fill a vacuum, or take keys back from chrome that commonly keeps them
+	// after connect (session tree) / toolbar. Never steal from text entry or
+	// select widgets the operator is actively editing.
+	if cur != nil && focusShouldKeep(cur) {
+		return
+	}
 	c.Focus(i.mount.Focus)
+}
+
+// focusShouldKeep reports widgets that must retain keyboard focus when the
+// terminal tab is selected (filter boxes, dialog fields, etc.).
+func focusShouldKeep(obj fyne.Focusable) bool {
+	switch obj.(type) {
+	case *widget.Entry, *widget.Select, *widget.Check:
+		return true
+	default:
+		return false
+	}
 }
 
 // notifyLayout is a max-layout that reports every layout pass. It exists
@@ -869,6 +1265,9 @@ func (s *Shell) CloseAll() {
 // back, and the terminal gets the blame.
 func (s *Shell) focusTab(t *container.TabItem) {
 	if inst := s.instanceFor(t); inst != nil {
+		if inst.mount.Kind == KindTerminal {
+			s.lastTerminal = inst
+		}
 		inst.settle()
 	}
 }
@@ -895,30 +1294,99 @@ func (s *Shell) TabCount() int { return len(s.byID) }
 // the window manager is pointing at, and guessing would close the wrong one.
 func (s *Shell) Current() *Instance { return s.instanceFor(s.tabs.Selected()) }
 
-// SendToActive writes text to the current tab when it is a terminal that
-// implements SendBytes. Non-terminal applets are ignored.
-func (s *Shell) SendToActive(text string) {
-	if s == nil || text == "" {
-		return
+// ActiveTerminal picks the SSH tab that should receive button-bar / send-to-active
+// traffic: selected terminal tab, else last SSH tab, else focused terminal,
+// else the only open terminal.
+func (s *Shell) ActiveTerminal() *Instance {
+	if s == nil {
+		return nil
 	}
-	cur := s.Current()
+	if cur := s.Current(); cur != nil && cur.mount.Kind == KindTerminal {
+		return cur
+	}
+	if s.lastTerminal != nil && !s.lastTerminal.closed.Load() && s.lastTerminal.mount.Kind == KindTerminal {
+		return s.lastTerminal
+	}
+	for _, inst := range s.instances() {
+		if inst == nil || inst.closed.Load() || inst.mount.Kind != KindTerminal {
+			continue
+		}
+		sess, ok := inst.mount.Focus.(*Session)
+		if ok && sess != nil && sess.HasTerminalFocus() {
+			return inst
+		}
+	}
+	var only *Instance
+	n := 0
+	for _, inst := range s.instances() {
+		if inst == nil || inst.closed.Load() || inst.mount.Kind != KindTerminal {
+			continue
+		}
+		n++
+		only = inst
+	}
+	if n == 1 {
+		return only
+	}
+	return nil
+}
+
+// SendToActive writes text to the active SSH tab. Returns false when no terminal
+// target exists or the send is rejected. Newlines are normalized to CR so
+// button/script sends match what typing Enter produces.
+func (s *Shell) SendToActive(text string) bool {
+	if s == nil || text == "" {
+		return false
+	}
+	text = NormalizeTerminalSend(text)
+	cur := s.ActiveTerminal()
 	if cur == nil {
-		return
+		return false
+	}
+	if sess, ok := cur.mount.Focus.(*Session); ok && sess != nil {
+		return sess.SendUser([]byte(text))
 	}
 	type sender interface{ SendBytes([]byte) }
-	if x, ok := cur.mount.Applet.(sender); ok {
-		x.SendBytes([]byte(text))
+	x, ok := cur.mount.Applet.(sender)
+	if !ok {
+		return false
 	}
+	x.SendBytes([]byte(text))
+	return true
 }
 
 // SendToAllTerminals writes text to every open terminal tab (button scope=all).
 func (s *Shell) SendToAllTerminals(text string) {
+	s.SendToMatching(text, nil)
+}
+
+// TerminalMeta is optional folder/customer metadata a terminal applet may expose
+// so the shell can fan out to a customer without knowing MSP layout rules.
+type TerminalMeta interface {
+	FolderPath() string
+	CustomerName() string
+}
+
+// SendToMatching writes text to every open terminal whose match returns true.
+// A nil match sends to all terminals (same as SendToAllTerminals).
+func (s *Shell) SendToMatching(text string, match func(meta TerminalMeta) bool) {
 	if s == nil || text == "" {
 		return
 	}
+	text = NormalizeTerminalSend(text)
 	type sender interface{ SendBytes([]byte) }
 	for _, i := range s.instances() {
 		if i == nil || i.mount.Kind != KindTerminal {
+			continue
+		}
+		if match != nil {
+			meta, ok := i.mount.Applet.(TerminalMeta)
+			if !ok || !match(meta) {
+				continue
+			}
+		}
+		if sess, ok := i.mount.Focus.(*Session); ok && sess != nil {
+			_ = sess.SendUser([]byte(text))
 			continue
 		}
 		if x, ok := i.mount.Applet.(sender); ok {
@@ -927,10 +1395,65 @@ func (s *Shell) SendToAllTerminals(text string) {
 	}
 }
 
+// SelectNextTab / SelectPrevTab cycle docked tabs (Ctrl+Tab / Ctrl+Shift+Tab).
+func (s *Shell) SelectNextTab() { s.cycleTab(1) }
+func (s *Shell) SelectPrevTab() { s.cycleTab(-1) }
+
+func (s *Shell) cycleTab(delta int) {
+	if s == nil {
+		return
+	}
+	if s.tiled {
+		s.cycleTile(delta)
+		return
+	}
+	if s.tabs == nil {
+		return
+	}
+	items := s.tabs.Items
+	if len(items) == 0 {
+		return
+	}
+	cur := s.tabs.Selected()
+	idx := 0
+	for i, it := range items {
+		if it == cur {
+			idx = i
+			break
+		}
+	}
+	n := len(items)
+	idx = (idx + delta%n + n) % n
+	s.tabs.Select(items[idx])
+}
+
 // CloseCurrent closes the selected tab. No-op when nothing is docked.
 func (s *Shell) CloseCurrent() {
 	if inst := s.Current(); inst != nil {
 		inst.Close()
+	}
+}
+
+// Activate brings an instance to the front: selects its tab, or raises its
+// detached window. No-op for a nil or already-closed instance.
+func (s *Shell) Activate(inst *Instance) {
+	if s == nil || inst == nil || inst.closed.Load() {
+		return
+	}
+	if inst.win != nil {
+		inst.win.RequestFocus()
+		inst.settle()
+		return
+	}
+	if inst.tab != nil {
+		s.tabs.Select(inst.tab)
+		inst.settle()
+		return
+	}
+	if s.tiled {
+		if _, ok := s.tileRoots[inst.info.ID]; ok {
+			s.activateTile(inst)
+		}
 	}
 }
 

@@ -16,8 +16,8 @@ import (
 
 // ScriptSender is what the host supplies so scripts never import the shell.
 type ScriptSender interface {
-	SendActive(text string)
-	SendAll(text string)
+	scripts.Sender
+	scripts.Expecter
 }
 
 // ShowRunScriptDialog lets the operator pick a script and run it.
@@ -27,7 +27,15 @@ func ShowRunScriptDialog(w fyne.Window, file scripts.File, sender ScriptSender, 
 		return
 	}
 	if len(file.Scripts) == 0 {
-		dialog.ShowInformation("Scripts", "No scripts defined. Edit scripts.yaml first.", w)
+		dialog.ShowConfirm("Scripts", "No scripts yet. Open the script editor to create one?", func(ok bool) {
+			if !ok {
+				return
+			}
+			ShowScriptEditor(w, ScriptEditorOptions{
+				Path: scripts.Path(GetAppHome()),
+				File: scripts.Defaults(),
+			})
+		}, w)
 		return
 	}
 

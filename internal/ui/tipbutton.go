@@ -37,6 +37,17 @@ func TipButtonLabeled(label string, icon fyne.Resource, tapped func()) *TipButto
 	return b
 }
 
+// TipButtonText is a text-only button with an optional tooltip.
+func TipButtonText(label, tip string, tapped func()) *TipButton {
+	b := ttwidget.NewButton(label, tapped)
+	if tip != "" {
+		b.SetToolTip(tip)
+	} else if label != "" {
+		b.SetToolTip(label)
+	}
+	return b
+}
+
 // TipIconButtonLow is TipIconButton with LowImportance chrome.
 func TipIconButtonLow(tip string, icon fyne.Resource, tapped func()) *TipButton {
 	b := TipIconButton(tip, icon, tapped)

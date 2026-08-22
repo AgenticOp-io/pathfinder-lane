@@ -1,9 +1,10 @@
 // Package scripts is Pathfinder's session scripting model: named sequences of
-// send/delay steps stored as YAML under ~/.pathfinderssh/scripts.yaml.
+// send / wait / delay steps stored as YAML under ~/.pathfinderssh/scripts.yaml.
 //
-// The Fyne host wires Send into open terminals; this package never imports the
-// UI toolkit. Prompt-aware automation stays in netexec — these scripts inject
-// keystrokes the same way the button bar does.
+// The Fyne host wires Send and Wait into open terminals; this package never
+// imports the UI toolkit. Prompt-aware automation for crawls stays in netexec —
+// these scripts inject keystrokes the same way the button bar does, and can
+// pause until the active session prints a marker.
 package scripts
 
 import (
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,18 +21,34 @@ import (
 
 const FileName = "scripts.yaml"
 
+// DefaultWaitTimeoutMs is used when a wait_for / wait_regex step omits timeout_ms.
+const DefaultWaitTimeoutMs = 30000
+
 // Step is one action in a script.
+//
+// Execution order within a step:
+//  1. Send (if non-empty)
+//  2. Wait for wait_for / wait_regex (if set) — watches the active terminal
+//  3. DelayMs sleep (if > 0), including after a successful wait
 type Step struct {
 	// Send is literal text pushed to the session. Use \n for Return.
 	Send string `yaml:"send,omitempty"`
-	// DelayMs waits after the send (or alone if Send is empty).
+	// DelayMs waits after the send/wait (or alone if both are empty).
 	DelayMs int `yaml:"delay_ms,omitempty"`
+	// WaitFor pauses until this literal substring appears in session output.
+	WaitFor string `yaml:"wait_for,omitempty"`
+	// WaitRegex pauses until this RE2 pattern matches session output.
+	// Ignored when WaitFor is also set (literal wins).
+	WaitRegex string `yaml:"wait_regex,omitempty"`
+	// TimeoutMs bounds a wait. 0 means DefaultWaitTimeoutMs.
+	TimeoutMs int `yaml:"timeout_ms,omitempty"`
 }
 
 // Script is a named runnable sequence.
 type Script struct {
 	Name string `yaml:"name"`
-	// Scope is "active" (default) or "all" SSH tabs.
+	// Scope is "active" (default) or "all" SSH tabs for Send.
+	// Wait always watches the active tab.
 	Scope string `yaml:"scope,omitempty"`
 	Steps []Step `yaml:"steps"`
 }
@@ -50,15 +68,24 @@ func Defaults() File {
 				Name:  "Disable paging (Cisco)",
 				Scope: "active",
 				Steps: []Step{
-					{Send: "terminal length 0\n", DelayMs: 300},
-					{Send: "terminal width 0\n", DelayMs: 200},
+					{Send: "terminal length 0\n", WaitFor: "#", TimeoutMs: 10000, DelayMs: 100},
+					{Send: "terminal width 0\n", WaitFor: "#", TimeoutMs: 10000, DelayMs: 100},
 				},
 			},
 			{
 				Name:  "Show version",
 				Scope: "active",
 				Steps: []Step{
-					{Send: "show version\n", DelayMs: 500},
+					{Send: "show version\n", WaitRegex: `[>#]\s*$`, TimeoutMs: 20000, DelayMs: 200},
+				},
+			},
+			{
+				Name:  "Enter enable (wait for #)",
+				Scope: "active",
+				Steps: []Step{
+					{Send: "enable\n", WaitFor: "Password:", TimeoutMs: 10000},
+					// Operator still types the password interactively, or add a send step.
+					{WaitFor: "#", TimeoutMs: 60000},
 				},
 			},
 		},
@@ -95,6 +122,7 @@ func Load(path string) (File, error) {
 		}
 		for j := range f.Scripts[i].Steps {
 			f.Scripts[i].Steps[j].Send = unescape(f.Scripts[i].Steps[j].Send)
+			f.Scripts[i].Steps[j].WaitFor = unescape(f.Scripts[i].Steps[j].WaitFor)
 		}
 	}
 	return f, nil
@@ -112,6 +140,7 @@ func Save(path string, f File) error {
 		steps := make([]Step, len(sc.Steps))
 		for j, st := range sc.Steps {
 			st.Send = escape(st.Send)
+			st.WaitFor = escape(st.WaitFor)
 			steps[j] = st
 		}
 		sc.Steps = steps
@@ -146,15 +175,31 @@ type Sender interface {
 	SendAll(text string)
 }
 
+// Expecter watches the active session's output for a match.
+// Hosts that cannot expect should still implement it and return a clear error.
+type Expecter interface {
+	// WaitForPattern blocks until pattern appears in output (literal or regex).
+	WaitForPattern(ctx context.Context, pattern string, regex bool, timeout time.Duration) error
+}
+
+// Runner is Sender plus optional Expecter.
+type Runner interface {
+	Sender
+}
+
 // Run executes sc using sender. Context cancel stops between steps.
+// When a step has wait_for / wait_regex, sender must also implement Expecter.
 func Run(ctx context.Context, sc Script, sender Sender) error {
 	if sender == nil {
 		return fmt.Errorf("scripts: nil sender")
 	}
 	scopeAll := strings.EqualFold(sc.Scope, "all")
+	exp, _ := sender.(Expecter)
+
 	for i, st := range sc.Steps {
+		stepN := i + 1
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("script %q stopped at step %d: %w", sc.Name, i+1, err)
+			return fmt.Errorf("script %q stopped at step %d: %w", sc.Name, stepN, err)
 		}
 		if text := st.Send; text != "" {
 			if scopeAll {
@@ -163,15 +208,51 @@ func Run(ctx context.Context, sc Script, sender Sender) error {
 				sender.SendActive(text)
 			}
 		}
+
+		waitPat := strings.TrimSpace(st.WaitFor)
+		waitRE := strings.TrimSpace(st.WaitRegex)
+		if waitPat != "" || waitRE != "" {
+			if exp == nil {
+				return fmt.Errorf("script %q step %d: wait_for requires an active SSH session that can expect", sc.Name, stepN)
+			}
+			timeout := time.Duration(st.TimeoutMs) * time.Millisecond
+			if timeout <= 0 {
+				timeout = time.Duration(DefaultWaitTimeoutMs) * time.Millisecond
+			}
+			useRE := waitPat == "" && waitRE != ""
+			pat := waitPat
+			if useRE {
+				pat = waitRE
+			}
+			if err := exp.WaitForPattern(ctx, pat, useRE, timeout); err != nil {
+				return fmt.Errorf("script %q step %d: wait for %q: %w", sc.Name, stepN, pat, err)
+			}
+		}
+
 		if st.DelayMs > 0 {
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("script %q stopped at step %d: %w", sc.Name, i+1, ctx.Err())
+				return fmt.Errorf("script %q stopped at step %d: %w", sc.Name, stepN, ctx.Err())
 			case <-time.After(time.Duration(st.DelayMs) * time.Millisecond):
 			}
 		}
 	}
 	return nil
+}
+
+// MatchBuffer reports whether buf contains a literal or regex match for pattern.
+func MatchBuffer(buf, pattern string, useRegex bool) (bool, error) {
+	if pattern == "" {
+		return true, nil
+	}
+	if !useRegex {
+		return strings.Contains(buf, pattern), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false, fmt.Errorf("bad wait_regex: %w", err)
+	}
+	return re.MatchString(buf), nil
 }
 
 func unescape(s string) string {

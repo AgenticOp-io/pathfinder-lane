@@ -163,7 +163,7 @@
           <option value="grid">Grid</option>
         </select>
         <label class="check"><input type="checkbox" id="hideUndiscovered" checked> Hide undiscovered</label>
-        <label class="check"><input type="checkbox" id="hideLeaf" checked> Hide leaf nodes</label>
+        <label class="check"><input type="checkbox" id="hideLeaf"> Hide leaf nodes</label>
         <div class="row" style="margin-top:6px">
           <button id="btnFit">Fit</button>
           <button id="btnZoomIn">+</button>
@@ -185,13 +185,20 @@
         <div class="row">
           <button id="btnPNG">PNG</button>
           <button id="btnJSON">JSON</button>
+          <button id="btnCSV">CSV</button>
+        </div>
+        <div class="row" style="margin-top:6px">
           <button id="btnDrawIO">Draw.io</button>
+          <button id="btnLucid">Lucidchart</button>
         </div>
         <select id="drawioMode" style="margin-top:6px">
-          <option value="icons">Device icons</option>
-          <option value="shapes">Plain shapes</option>
+          <option value="shapes">Plain shapes (best for Lucid)</option>
+          <option value="icons">Device icons (Cisco stencils)</option>
         </select>
-        <div class="hint" style="margin-top:6px">Draw.io exports what is visible, arranged as it is now.</div>
+        <div class="hint" style="margin-top:6px">
+          Lucidchart: download → Lucid <b>Import documents</b> → Draw.io (.drawio).
+          Same layout as on screen (visible nodes only).
+        </div>
       </div>
 
       <div class="section">
@@ -211,6 +218,7 @@
 <script src="/assets/vendor/cytoscape.min.js"></script>
 <script src="/assets/viewer.js"></script>
 <script src="/assets/drawio.js"></script>
+<script src="/assets/csvexport.js"></script>
 <script src="/assets/app.js"></script>
 </body>
 </html>

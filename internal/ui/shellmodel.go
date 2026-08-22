@@ -31,6 +31,7 @@ const (
 	KindCrawl    Kind = "crawl"
 	KindCapture  Kind = "capture"
 	KindSearch   Kind = "search"
+	KindSFTP     Kind = "sftp"
 )
 
 // Placement is where an instance is currently displayed.
@@ -251,7 +252,7 @@ func (r *Registry) Summary() string {
 	// glance and a line whose parts reshuffle between renders is read
 	// twice every time. A new Kind that is not added here counts for
 	// nothing and shows nothing.
-	for _, k := range []Kind{KindTerminal, KindCrawl, KindCapture, KindSearch} {
+	for _, k := range []Kind{KindTerminal, KindCrawl, KindCapture, KindSearch, KindSFTP} {
 		if n := counts[k]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n, plural(string(k), n)))
 		}

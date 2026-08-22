@@ -33,7 +33,9 @@ func parseNodes(data []byte) ([]NodeRef, error) {
 		return nil, fmt.Errorf("parse map: %w", err)
 	}
 	if len(m) == 0 {
-		return nil, fmt.Errorf("map contains no devices")
+		// Empty crawl still produced a file — list it so the operator can see
+		// the run happened; opening shows an empty graph.
+		return nil, nil
 	}
 
 	nodes := make(map[string]NodeRef, len(m))

@@ -52,8 +52,10 @@ class TopologyViewer {
     this._platformMap = null;
 
     // Filter state
+    // hideLeafNodes used to use degree<=1, which also hid isolated crawled
+    // devices (degree 0) — a map of Linux hosts with empty peers drew blank.
     this.hideUndiscovered = true;
-    this.hideLeafNodes = true;
+    this.hideLeafNodes = false;
 
     // Callbacks
     this.onNodeSelect = options.onNodeSelect || null;
@@ -156,6 +158,16 @@ class TopologyViewer {
       <line x1="21" y1="12" x2="33" y2="12" stroke="#2d5f8a" stroke-width="1.4" opacity="0.7"/>
       <line x1="21" y1="24" x2="33" y2="24" stroke="#2d5f8a" stroke-width="1.4" opacity="0.7"/>
       <line x1="21" y1="36" x2="33" y2="36" stroke="#2d5f8a" stroke-width="1.4" opacity="0.7"/>
+    </svg>`,
+
+    // ── Hypervisor: stacked racks ──
+    'hypervisor': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+      <rect x="8" y="8" width="32" height="10" rx="2" fill="#fff" stroke="#2d5f8a" stroke-width="2"/>
+      <rect x="8" y="20" width="32" height="10" rx="2" fill="#fff" stroke="#2d5f8a" stroke-width="2"/>
+      <rect x="8" y="32" width="32" height="10" rx="2" fill="#fff" stroke="#2d5f8a" stroke-width="2"/>
+      <circle cx="14" cy="13" r="1.5" fill="#2d5f8a"/>
+      <circle cx="14" cy="25" r="1.5" fill="#2d5f8a"/>
+      <circle cx="14" cy="37" r="1.5" fill="#2d5f8a"/>
     </svg>`,
 
     // ── Access point: puck with radiating waves ──
@@ -301,7 +313,7 @@ class TopologyViewer {
           'text-background-padding': '3px',
           'text-background-shape': 'roundrectangle',
           'border-width': 2,
-          'border-color': 'data(vendorColor)',
+          'border-color': 'data(borderColor)',
           'border-opacity': 0.8,
         },
       },
@@ -318,6 +330,19 @@ class TopologyViewer {
           'border-opacity': 0.8,
           'opacity': 0.6,
         },
+      },
+      {
+        // Low crawl confidence: soft amber border (overrides vendor when set).
+        selector: 'node[confidence > 0][confidence < 50]',
+        style: { 'border-color': '#d9822b', 'border-opacity': 0.95 },
+      },
+      {
+        selector: 'node[confidence >= 50][confidence < 80]',
+        style: { 'border-color': '#2d72d2', 'border-opacity': 0.95 },
+      },
+      {
+        selector: 'node[confidence >= 80]',
+        style: { 'border-color': '#238551', 'border-opacity': 0.95 },
       },
       {
         selector: 'node:selected',
@@ -438,18 +463,22 @@ class TopologyViewer {
     for (const [deviceName, deviceData] of Object.entries(data)) {
       const details = deviceData.node_details || {};
       nodeIds.add(deviceName);
+      const conf = Number(details.confidence) || 0;
+      const label = conf > 0 ? `${deviceName} · ${Math.round(conf)}%` : deviceName;
 
       elements.push({
         group: 'nodes',
         data: {
           id: deviceName,
-          label: deviceName,
+          label: label,
           ip: details.ip || '',
           platform: details.platform || 'Unknown',
+          confidence: conf,
           icon: this._getIconForPlatform(details.platform, deviceName),
           discovered: true,
           vendorColor: this._getVendorColor(details.platform, deviceName),
           vendorFill: this._getVendorFill(details.platform, deviceName),
+          borderColor: this._getVendorColor(details.platform, deviceName),
         },
       });
     }
@@ -458,18 +487,31 @@ class TopologyViewer {
       const peers = deviceData.peers || {};
 
       for (const [peerName, peerData] of Object.entries(peers)) {
+        const connections = (peerData.connections || []).filter(c => c && c.length >= 2);
+        const isGuest = connections.some(c => String(c[1] || '').toLowerCase() === 'guest'
+          || String(c[0] || '').toLowerCase().startsWith('qemu')
+          || String(c[0] || '').toLowerCase().startsWith('lxc')
+          || String(c[0] || '').toLowerCase().startsWith('esxi')
+          || String(c[0] || '').toLowerCase() === 'kvm');
+        const peerPlatform = peerData.platform || (isGuest ? 'linux' : 'Undiscovered');
+        const peerIP = peerData.ip || '';
+
         if (!nodeIds.has(peerName)) {
           nodeIds.add(peerName);
           elements.push({
             group: 'nodes',
             data: {
               id: peerName,
-              label: peerName + ' ⚠',
-              ip: '', platform: 'Undiscovered',
-              icon: this._getCachedIcon('undiscovered'),
+              label: isGuest ? peerName : (peerName + ' ⚠'),
+              ip: peerIP,
+              platform: peerPlatform,
+              icon: isGuest
+                ? this._getIconForPlatform(peerPlatform, peerName)
+                : this._getCachedIcon('undiscovered'),
               discovered: false,
-              vendorColor: '#c23030',
-              vendorFill: 'rgba(194,48,48,0.1)',
+              guest: isGuest,
+              vendorColor: isGuest ? this._getVendorColor(peerPlatform, peerName) : '#c23030',
+              vendorFill: isGuest ? this._getVendorFill(peerPlatform, peerName) : 'rgba(194,48,48,0.1)',
             },
           });
         }
@@ -477,22 +519,15 @@ class TopologyViewer {
         const edgeId = [deviceName, peerName].sort().join('--');
         if (!addedEdges.has(edgeId)) {
           addedEdges.add(edgeId);
-          // Every connection, one per line — not just the first. A bundle
-          // between two devices is one edge with several member interfaces,
-          // and showing only connections[0] hides the rest of the bundle
-          // while looking like a complete answer. Rendering needs
-          // 'text-wrap': 'wrap' in the edge style or the newlines collapse.
-          const connections = (peerData.connections || []).filter(c => c && c.length >= 2);
-          const label = connections.map(c => `${c[0]} ↔ ${c[1]}`).join('\n');
+          const label = isGuest
+            ? 'guest'
+            : connections.map(c => `${c[0]} ↔ ${c[1]}`).join('\n');
           elements.push({
             group: 'edges',
             data: {
               id: edgeId, source: deviceName, target: peerName, label,
-              // Carried so the style can thicken a bundle. At the zoom levels
-              // where a whole fabric fits on screen the label is unreadable
-              // and the line is all there is, so the count has to reach the
-              // renderer as data rather than only as text.
-              connectionCount: connections.length,
+              connectionCount: Math.max(connections.length, 1),
+              guest: isGuest,
             },
           });
         }
@@ -547,6 +582,8 @@ class TopologyViewer {
       'generic_server': 'server',
       'pc': 'server',
       'workstation': 'server',
+      'hypervisor': 'hypervisor',
+      'server': 'server',
     };
     return shapeMap[name] || null;
   }
@@ -599,6 +636,8 @@ class TopologyViewer {
       'router': 'router',
       'l2-switch': 'workgroup-switch',
       'l3-switch': 'layer-3-switch',
+      'hypervisor': 'hypervisor',
+      'server': 'server',
     };
     return map[role] || 'layer-3-switch';
   }
@@ -697,7 +736,8 @@ class TopologyViewer {
     const toHide = this.cy.collection();
     nodes.forEach(node => {
       if (this.hideUndiscovered && !node.data('discovered')) { toHide.merge(node); return; }
-      if (this.hideLeafNodes && node.degree(false) <= 1) { toHide.merge(node); return; }
+      // Only true single-edge leaves — never degree 0 (isolated crawled nodes).
+      if (this.hideLeafNodes && node.degree(false) === 1) { toHide.merge(node); return; }
     });
 
     if (toHide.length > 0) { toHide.hide(); toHide.connectedEdges().hide(); }
@@ -777,6 +817,7 @@ class TopologyViewer {
       label: n.data('label'),
       ip: n.data('ip'),
       platform: n.data('platform'),
+      confidence: n.data('confidence') || 0,
       vendor: this._detectVendor(n.data('platform'), n.id()),
       discovered: n.data('discovered'),
     })).sort((a, b) => a.label.localeCompare(b.label));
@@ -865,10 +906,24 @@ class TopologyViewer {
     const p = (platform || '').toLowerCase();
     const n = (nodeId || '').toLowerCase();
 
+    if (p.includes('proxmox') || p.includes('vmware') || p.includes('esxi')
+        || p.includes('linux_kvm') || p.includes('hypervisor')
+        || n.includes('proxmox') || n.includes('esxi') || n.includes('pve')) {
+      return 'hypervisor';
+    }
+
     const fwPlatform = ['asa', 'firepower', 'ftd', 'fxos', 'pan-os', 'pa-', 'panos',
-                        'fortigate', 'fortios', 'srx', 'screenos', 'checkpoint', 'gaia'];
+                        'fortigate', 'fortios', 'srx', 'screenos', 'checkpoint', 'gaia',
+                        'cisco_asa', 'mikrotik'];
     const fwName = ['fw', 'firewall', 'palo', 'forti', 'asa'];
     if (fwPlatform.some(pat => p.includes(pat)) || fwName.some(pat => n.includes(pat))) return 'firewall';
+
+    if (p === 'linux' || p.includes('bsd') || p.includes('ubuntu') || p.includes('debian')
+        || n.includes('srv') || n.includes('server') || n.includes('vm-') || n.includes('-vm')) {
+      return 'server';
+    }
+
+    if (p.includes('mikrotik') || p.includes('routeros')) return 'router';
 
     const rtrPlatform = ['isr', 'asr', 'ncs', 'crs', 'c8000', '7600', '7200', '7500',
                          'mx-', 'mx9', 'mx4', 'mx2', 'mx1', 'mx8', 'mx10',

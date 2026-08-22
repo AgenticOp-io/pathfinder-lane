@@ -38,10 +38,10 @@ const (
 	aboutLogoWidth  float32 = 280
 	aboutLogoHeight float32 = 280
 
-	// Tall enough for the logo, the three heading lines and three detail
-	// rows without scrolling. The scroll is the overflow path for a host
-	// that reports more than that, not the normal case.
-	aboutDialogHeight float32 = 680
+	// Tall enough for the logo, heading lines, and GPL + path detail rows
+	// without scrolling. The scroll is the overflow path for a host that
+	// reports more than that, not the normal case.
+	aboutDialogHeight float32 = 760
 )
 
 // ShowAbout opens the About box over w.

@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -142,6 +143,22 @@ type Session struct {
 	// before Attach. It replaces the old sshConfig.LogEnabled, which is gone
 	// with the rest of the SSH-shaped config.
 	sessionLogEnabled bool
+
+	// Output watchers for script wait_for / wait_regex (see session_expect.go).
+	outMu     sync.Mutex
+	recentOut strings.Builder
+	outWatch  []*outWatcher
+
+	// sendGate, when set, may block interactive / scripted sends. Return
+	// ok=false with a reason. Anti-idle uses SendRaw and skips this gate.
+	sendGate func() (ok bool, reason string)
+
+	// onUserSend notes bytes the operator typed or that scripts/buttons sent
+	// (for the script recorder). Anti-idle does not call it.
+	onUserSend func([]byte)
+
+	// onOutputTee notes each readLoop chunk (recorder wait_for). Must not block.
+	onOutputTee func([]byte)
 }
 
 // NewSession creates a terminal widget with no transport attached. Input typed
@@ -154,16 +171,28 @@ func NewSession() *Session {
 	s.NativeTerminalWidget.SetFocusHost(s)
 
 	s.NativeTerminalWidget.writeOverride = func(data []byte) {
+		noteInputDebug("type", data, s.Connected())
 		if !s.Connected() {
 			// Disconnected, but the user is typing into the pane. Offer to
 			// reconnect rather than silently swallowing the bytes.
 			s.requestReconnect()
 			return
 		}
+		if s.sendGate != nil {
+			if ok, reason := s.sendGate(); !ok {
+				noteInputDebug("gate-block:"+reason, data, true)
+				// Visible — silent drops look exactly like a dead keyboard.
+				s.feed("\r\n\x1b[33m[pathfinder] send blocked: " + reason + "\x1b[0m\r\n")
+				return
+			}
+		}
 		// Real user input resets the anti-idle clock. Anti-idle's own
 		// keystrokes go through SendRaw and never reach here, so they
 		// cannot hold the session open by themselves.
 		s.noteUserInput()
+		if s.onUserSend != nil {
+			s.onUserSend(data)
+		}
 		s.write(data)
 	}
 
@@ -332,6 +361,7 @@ func (s *Session) readLoop(ctx context.Context) {
 			// Tee the raw bytes to the transcript: exact stream, no framing
 			// assumptions.
 			s.logger.Load().Write(data)
+			s.noteOutput(data)
 
 			chunk := append(utf8tail, data...)
 			cut := completePrefixLen(chunk)
@@ -469,11 +499,16 @@ func (s *Session) writeSync(data []byte) {
 	defer s.writeMu.Unlock()
 	tp := s.transport()
 	if tp == nil {
+		noteInputDebug("write-nil-transport", data, false)
 		return
 	}
-	if _, err := tp.Write(data); err != nil {
+	n, err := tp.Write(data)
+	if err != nil {
 		log.Printf("transport write error: %v", err)
+		noteInputDebug("write-err:"+err.Error(), data, true)
+		return
 	}
+	noteInputDebug(fmt.Sprintf("write-ok:%d", n), data, true)
 }
 
 // SendRaw writes without touching the idle clock. Anti-idle uses it so its own
@@ -483,6 +518,50 @@ func (s *Session) SendRaw(data []byte) {
 		return
 	}
 	s.write(data)
+}
+
+// SendUser is the gated path for macros, scripts, and chat. It respects
+// sendGate and notifies the script recorder. Returns false when blocked.
+func (s *Session) SendUser(data []byte) bool {
+	if s == nil || len(data) == 0 || !s.Connected() {
+		noteInputDebug("senduser-skip", data, s != nil && s.Connected())
+		return false
+	}
+	if s.sendGate != nil {
+		if ok, reason := s.sendGate(); !ok {
+			noteInputDebug("senduser-gate:"+reason, data, true)
+			s.feed("\r\n\x1b[33m[pathfinder] send blocked: " + reason + "\x1b[0m\r\n")
+			return false
+		}
+	}
+	s.noteUserInput()
+	if s.onUserSend != nil {
+		s.onUserSend(data)
+	}
+	noteInputDebug("senduser", data, true)
+	s.write(data)
+	return true
+}
+
+// SetSendGate installs a policy check for interactive and scripted sends.
+func (s *Session) SetSendGate(fn func() (bool, string)) {
+	if s != nil {
+		s.sendGate = fn
+	}
+}
+
+// SetOnUserSend installs a recorder hook for typed / scripted / button sends.
+func (s *Session) SetOnUserSend(fn func([]byte)) {
+	if s != nil {
+		s.onUserSend = fn
+	}
+}
+
+// SetOnOutputTee installs a hook for each session output chunk (recorder wait_for).
+func (s *Session) SetOnOutputTee(fn func([]byte)) {
+	if s != nil {
+		s.onOutputTee = fn
+	}
 }
 
 // ResizeTerminal pushes a new window size to the far end only.
@@ -554,8 +633,16 @@ func (s *Session) Close() error {
 	}
 	// Outside the lock: closing a transport whose device has gone away can
 	// block in the driver, and holding tpMu through that would stall every
-	// reader with it.
-	return tp.Close()
+	// reader with it. Bound the wait so quit / tab-close cannot hang forever
+	// on a wedged serial or SSH close.
+	done := make(chan error, 1)
+	go func() { done <- tp.Close() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(2 * time.Second):
+		return fmt.Errorf("transport close timed out after 2s")
+	}
 }
 
 // SetStateChangeHandler sets the callback for status changes.

@@ -162,9 +162,17 @@ func (t *SessionTree) SelectedFolder() string {
 	return ""
 }
 
+// FocusFilter puts the keyboard in the session tree filter box (Ctrl+L).
+func (t *SessionTree) FocusFilter() {
+	if t == nil || t.search == nil || t.opts.Window == nil {
+		return
+	}
+	t.opts.Window.Canvas().Focus(t.search)
+}
+
 func (t *SessionTree) build() {
 	t.search = widget.NewEntry()
-	t.search.SetPlaceHolder("Filter by folder/session name")
+	t.search.SetPlaceHolder("Filter by folder/session name (Ctrl+L)")
 	t.search.OnChanged = func(string) { t.scheduleFilterRefresh() }
 
 	t.status = widget.NewLabel("")
@@ -216,6 +224,15 @@ func (t *SessionTree) build() {
 
 	bottom := container.NewVBox(actions, t.status)
 	t.content = container.NewBorder(t.search, bottom, nil, nil, t.tw)
+	t.refresh()
+}
+
+// RefreshView redraws the inventory from the current tree and filter.
+// Call after theme/icon settings change so branch expand glyphs update.
+func (t *SessionTree) RefreshView() {
+	if t == nil {
+		return
+	}
 	t.refresh()
 }
 
@@ -398,6 +415,10 @@ func (t *SessionTree) newCustomer() {
 			if _, err := t.tree.CreateCustomer(product.CustomersRoot, entry.Text); err != nil {
 				t.error(err)
 				return
+			}
+			if _, err := EnsureCustomerMapsDir(GetAppHome(), entry.Text); err != nil {
+				// Session folder still exists; maps dir can be created on first crawl.
+				t.status.SetText("Customer created; maps folder: " + err.Error())
 			}
 			t.changed()
 			t.status.SetText("Customer created under " + product.CustomersRoot)

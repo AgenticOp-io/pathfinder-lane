@@ -392,12 +392,27 @@ func (c *Crawler) crawlOne(ctx context.Context, it item) *topo.Device {
 	}
 
 	plan, ok := planFor(fp.Name)
+	if netexec.IsHypervisor(fp.Name) {
+		guests := collectGuests(ctx, sess, fp.Name)
+		if len(guests) > 0 {
+			d.Neighbors = append(d.Neighbors, guests...)
+			c.cfg.Emit.Send(crawlrun.Event{Kind: crawlrun.KindCollect, Identity: it.identity,
+				Detail: "guest inventory", Parsed: len(guests), New: len(guests)})
+			c.cfg.Log("crawl: %s: hypervisor guest inventory → %d guests", target, len(guests))
+		} else {
+			c.cfg.Log("crawl: %s: hypervisor %q — no guests listed (or commands unavailable)", target, fp.Name)
+		}
+	}
 	if !ok {
-		// discovered but not crawlable (e.g. linux, unknown): keep as a
-		// mapped leaf with no neighbors.
+		// discovered but not crawlable for L2 neighbors (e.g. plain linux):
+		// keep as a mapped node; hypervisors may still have guest peers.
+		detail := "no neighbor plan; leaf"
+		if len(d.Neighbors) > 0 {
+			detail = "guest inventory only"
+		}
 		c.cfg.Emit.Send(crawlrun.Event{Kind: crawlrun.KindPlatform,
-			Identity: it.identity, Platform: fp.Name, Detail: "no neighbor plan; leaf"})
-		c.cfg.Log("crawl: %s platform %q has no neighbor plan; leaf", target, fp.Name)
+			Identity: it.identity, Platform: fp.Name, Detail: detail})
+		c.cfg.Log("crawl: %s platform %q — %s", target, fp.Name, detail)
 		return d
 	}
 
@@ -650,6 +665,9 @@ func (c *Crawler) CrawlContext(ctx context.Context, seeds []string) []*topo.Devi
 
 // parseStep is separated for testability against captured output.
 func parseStep(platform string, st step, output string) ([]topo.Neighbor, error) {
+	if st.Key == "mikrotik_neighbor" {
+		return parseMikroTikNeighbors(output), nil
+	}
 	recs, err := tfsmParse(platform, st.Key, output)
 	if err != nil {
 		return nil, err

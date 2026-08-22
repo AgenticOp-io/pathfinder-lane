@@ -107,6 +107,14 @@ func (c *Client) Rename(oldpath, newpath string) error {
 	return c.c.Rename(oldpath, newpath)
 }
 
+func (c *Client) Getwd() (string, error) {
+	return c.c.Getwd()
+}
+
+func (c *Client) RealPath(p string) (string, error) {
+	return c.c.RealPath(p)
+}
+
 func Join(elem ...string) string {
 	return path.Join(elem...)
 }

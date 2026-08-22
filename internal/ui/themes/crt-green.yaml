@@ -1,12 +1,12 @@
 # Converted from nterm-js themes.js
 name: "crt-green"
-label: "Crt-green"
+label: "CRT Green (phosphor)"
 type: "dark"
 terminal:
   background: "#000000"
   foreground: "#00FF00"
   cursor: "#00FF00"
-  selection: "rgba(0, 255, 0, 0.3)"
+  selection: "#00FF004D"
   black: "#000000"
   red: "#FF0000"
   green: "#00FF00"

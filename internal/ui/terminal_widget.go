@@ -294,8 +294,16 @@ func (t *NativeTerminalWidget) GrabFocus() bool {
 	if c == nil {
 		return false
 	}
+	if len(c.Overlays().List()) > 0 {
+		return false
+	}
+	// Clear first. Focusing under a just-dismissed dialog (or while the
+	// session tree still held keys) can leave Fyne's focus manager thinking
+	// the terminal is focused while keystrokes never arrive. Nil then Focus
+	// resets that.
+	c.Focus(nil)
 	c.Focus(obj)
-	return true
+	return c.Focused() == fyne.Focusable(obj)
 }
 
 // SetHostCanvas records the canvas this terminal is currently displayed on,
@@ -1006,20 +1014,16 @@ func (t *NativeTerminalWidget) renderNormalModeUnified(f frame, shouldAutoScroll
 	// removed on exactly that reasoning. It is NOT dead: it is what marks the
 	// canvas dirty each frame. Without it the terminal painted once and then
 	// froze, with input still reaching the device and nothing appearing on
-	// screen. The granular SetCell/refreshCell path in setStyledRows is not
-	// enough on its own.
+	// screen (echo arrives minutes later when something else forces a layout).
+	// The granular SetCell/refreshCell path in setStyledRows is not enough on
+	// its own — and skipping Resize when the size is unchanged reintroduces
+	// that freeze. Always Resize; always Refresh after the cell updates.
 	gcw, gch := t.gridCellSize()
 	viewportSize := fyne.NewSize(
 		float32(t.cols)*gcw,
 		float32(viewport.visibleLines)*gch,
 	)
-
-	currentSize := t.textGrid.Size()
-	if currentSize.Width != viewportSize.Width || currentSize.Height != viewportSize.Height {
-		t.textGrid.Resize(viewportSize)
-		dlogf("NORMAL (%s): Resized viewport to %dx%d",
-			runtime.GOOS, t.cols, viewport.visibleLines)
-	}
+	t.textGrid.Resize(viewportSize)
 
 	// Extract visible content from unified system
 	visibleLines := t.extractUnifiedVisibleContent(allLines, viewport)
@@ -1051,6 +1055,12 @@ func (t *NativeTerminalWidget) renderNormalModeUnified(f frame, shouldAutoScroll
 	t.bgLayer.Update(visibleAttrs, sel)
 	// Update scroll bar position
 	t.updateUnifiedScrollBar(f, viewport)
+	// Force a canvas dirty flush. Resize above is supposed to do this, but on
+	// Windows (esp. ARM) Fyne can treat a same-size Resize as a no-op; without
+	// an explicit Refresh, SetCell updates sit in memory until some later
+	// layout (minutes later) finally paints — matching "typing works but echo
+	// shows up much later".
+	t.textGrid.Refresh()
 
 	dlogf("NORMAL (%s): Rendered viewport lines %d-%d of %d total",
 		runtime.GOOS, viewport.scrollOffset, viewport.scrollOffset+viewport.visibleLines-1, len(allLines))
@@ -1763,6 +1773,7 @@ func (t *NativeTerminalWidget) renderAlternateScreenUnified(f frame) {
 	// backstop that lands the SetCell glyph updates - the same mechanism normal
 	// mode relies on.
 	t.updateUnifiedScrollBar(f, viewport)
+	t.textGrid.Refresh()
 
 	dlogf("ALTERNATE: Rendered %d lines", len(displayLines))
 }

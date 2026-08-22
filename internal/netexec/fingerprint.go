@@ -197,12 +197,16 @@ func Fingerprint(ctx context.Context, s *Session) (*Platform, error) {
 			bestVersion, bestVerCmd = out, p.versionCmd
 		}
 		if name := classify(out, p.classes); name != "" {
-			return &Platform{
+			fp := &Platform{
 				Name:           name,
 				PagingDisable:  p.paging,
 				VersionCommand: p.versionCmd,
 				VersionOutput:  out,
-			}, nil
+			}
+			if name == "linux" {
+				fp = refineLinux(ctx, s, fp)
+			}
+			return fp, nil
 		}
 	}
 	return &Platform{

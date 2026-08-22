@@ -2,22 +2,18 @@
 // Authentication chain: agent -> public key -> password -> keyboard-interactive.
 //
 // Ported from the tetherssh backend with one upgrade: agent auth is actually
-// implemented here (the baseline stubbed it). Unix-socket agents only for
-// now; Windows OpenSSH agent runs on a named pipe and needs go-winio, which
-// is deliberately deferred to keep the dependency surface at x/crypto.
+// implemented here (the baseline stubbed it). Unix uses SSH_AUTH_SOCK; Windows
+// uses the OpenSSH named pipe via go-winio (see agent_windows.go).
 package sshcore
 
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
 )
 
 // expandHome expands a leading "~/" against the user's home directory.
@@ -80,27 +76,6 @@ func buildAuthMethods(cfg *Config) ([]ssh.AuthMethod, error) {
 		return nil, errors.New("no authentication methods available")
 	}
 	return methods, nil
-}
-
-// agentAuth returns agent-backed auth when SSH_AUTH_SOCK points at a live
-// agent, nil otherwise. Signers are fetched lazily at handshake time.
-func agentAuth() ssh.AuthMethod {
-	if runtime.GOOS == "windows" {
-		return nil // named-pipe agent support deferred
-	}
-	socket := os.Getenv("SSH_AUTH_SOCK")
-	if socket == "" {
-		return nil
-	}
-	return ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
-		conn, err := net.Dial("unix", socket)
-		if err != nil {
-			return nil, fmt.Errorf("ssh agent: %w", err)
-		}
-		// Connection intentionally left open: signatures happen over it
-		// during the handshake. Closed when the process exits.
-		return agent.NewClient(conn).Signers()
-	})
 }
 
 // publicKeyAuth builds key auth from the in-memory key (preferred) or the

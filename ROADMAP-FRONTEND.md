@@ -1,56 +1,66 @@
 # Pathfinder — Frontend Polish & SecureCRT-Replacement Roadmap
 
-**Status (AgenticOp track):** Phase A partial · Phase B SecureCRT import **shipped** · Phase C button bar + SFTP library **shipped** · GUI rebuild on AgenticOps products  
+**Status (AgenticOp track):** CRT P0 + MSP ops gaps largely **shipped** on `feature/crt-frontend-roadmap`  
 
-Work lives on branch `feature/crt-frontend-roadmap` → https://github.com/AgenticOp-io/pathfinderssh  
+Work: https://github.com/AgenticOp-io/pathfinderssh-msp  
 
 ---
 
-## Done in this pass
+## Done
 
 | Item | Where |
 | --- | --- |
-| SecureCRT importer (no passwords) | `internal/crtimport`, `pfseed import-securecrt` |
-| CSV import (VanDyke headers) | `pfseed import-csv` |
-| Path-encoded deep folders (`A / B / C`) | CRT import → `sessions.yaml` folders |
-| Folder session counts in tree | `internal/ui/treemodel.go` |
-| Recent-session touch on activate | `internal/recent` + host |
-| Button bar (`buttons.yaml`, active/all) | `internal/buttons` + shell SendTo* |
-| SFTP file transfer UI | Session → Transfer files / tab Files action |
-| YAML session scripts | `internal/scripts` + Scripts toolbar |
+| Persistent button bar + All-tabs arm | `buttonbar.go` + `SetBottom` |
+| Quick Connect + armable Send chat | `opsstrip.go` |
+| Shortcuts Ctrl+W/Tab/L | `installShortcuts` |
+| SFTP DocTabs applet | `KindSFTP` + `NewSFTPView` |
+| Port forwards L/R/SOCKS5 | `internal/portfwd` |
+| Send-to-customer + guarded multi-send | shell + Ops menu |
+| Ticket evidence pack | `internal/evidence` |
+| Script recorder → YAML | `scripts.Recorder` + Session menu |
+| Python session scripts (`crt.Screen`) | `internal/pyrun` |
+| Tile / untile terminals | `Shell.ToggleTileLayout` |
+| Windows OpenSSH agent named pipe | `sshcore/agent_windows.go` + go-winio |
+| Read-only + change window | Settings → Ops + `internal/policy` |
+| Crawl confidence column + map field | `crawlrun.Confidence`, `topo.NodeDetails` |
+| PSA JSON file sync | `psasync.FileSource` + `psa-customers.json` |
+| Cursor account / Cloud Agents API | `internal/cursorapi` |
+| Troubleshoot addon (gated) | Settings → Ops enable; Ops / toolbar → Troubleshoot agent modal |
 
-| File → Import SecureCRT | `cmd/pathfinder` |
-| First-run SecureCRT import | in-app dialog (`pathfinder.exe`) |
-| App install / shortcuts | `pathfinder.exe` / `-install` (no START.bat) |
+## Still open / polish
 
-| Rebuilt `pathfinder.exe` + `pfseed.exe` | `products/pathfinder/windows/` |
+- Live ConnectWise / Autotask / Halo SDKs (JSON file adapter is the shipped integration point)
+- Auvik: optional AuvikTunnel CLI bridge for collector-only sites (no REST terminal API)
+- Cursor Admin / Analytics enterprise endpoints (models list + Cloud Agents shipped)
 
-Verified dry-run on this machine: **786** importable / **19** skipped / **206** folders from VanDyke Config.
+## Auvik (inventory sync)
 
-## Still open (continue on same branch)
+| Capability | Status |
+| --- | --- |
+| API auth + list tenants/devices | `internal/auvik` |
+| Import/sync IPs → `Customers/<client>/Auvik/` | Settings → File → Import / Sync |
+| Merge existing sessions (Auvik authority for IPs) | `auvik.SyncTenantTree` |
+| Periodic sync all clients | Settings → Tools → Periodic Auvik sync |
+| AuvikTunnel on unreachable SSH | Settings → Tools → Auto tunnel + `AuvikTunnel` binary |
+| Device SSH passwords from Auvik | **Not available** — API has no login-credential export |
+| Headless SSH via Auvik API | **Not available** — Pathfinder SSH or local AuvikTunnel |
 
-### Phase A polish
-- Recent strip UI in the tree panel (persistence is done)
-- Quick Connect compact bar
-- Session form progressive disclosure
-- Keyboard shortcuts (Ctrl+W / Ctrl+Tab)
-- Discovery actions overflow grouping
 
-### Phase B
-- True nested folders (B2a) — **done**: sessions.yaml v2, recursive tree UI, CRT import nests Customers → site → vendor
-- Re-import merge UX feedback in wizard
+## Just landed (this pass)
 
-### Phase C
-- SFTP side-panel applet (library ready)
-- Port-forward UI
-- Armable send-to-all chat box (button scope=all works)
-- Windows SSH agent named pipe
+| Item | Where |
+| --- | --- |
+| Tiled terminal focus ring + title strip | `tilecell.go` + `Shell.activateTile` |
+| Ctrl+Tab cycles active tile when tiled | `Shell.cycleTile` |
+| Cursor cloud model picker | `cursoraccountdialog` + `ListModels` |
 
-### Phase D
-- Crawl from selected folder / tags
-- Map click jump-path preservation
+## Previously landed
+
+| Item | Where |
+| --- | --- |
+| Script recorder wait_for auto-detect | `scripts.Recorder.NoteOutput` + session `SetOnOutputTee` |
+| Map confidence labels + border tiers | `mapweb` viewer.js / app.js |
+| Troubleshoot script auto-suggest | `scripts.RankNames` + troubleshoot modal Refresh |
+| CRT Green / Amber phosphor labels | `themes/crt-green.yaml`, `crt-amber.yaml` |
 
 ---
-
-(Original roadmap body follows for reference.)
-

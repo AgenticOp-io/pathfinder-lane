@@ -51,6 +51,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -58,6 +59,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/scottpeterman/pathfinderssh/internal/appinstall"
+	"github.com/scottpeterman/pathfinderssh/internal/auvik"
 	"github.com/scottpeterman/pathfinderssh/internal/buttons"
 	"github.com/scottpeterman/pathfinderssh/internal/capture"
 	"github.com/scottpeterman/pathfinderssh/internal/capturedial"
@@ -66,9 +68,15 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/crawler"
 	"github.com/scottpeterman/pathfinderssh/internal/crawlrun"
 	"github.com/scottpeterman/pathfinderssh/internal/crtimport"
+	"github.com/scottpeterman/pathfinderssh/internal/cursorapi"
+	"github.com/scottpeterman/pathfinderssh/internal/evidence"
 	helpdoc "github.com/scottpeterman/pathfinderssh/internal/help"
 	"github.com/scottpeterman/pathfinderssh/internal/mapweb"
+	"github.com/scottpeterman/pathfinderssh/internal/mspauth"
+	"github.com/scottpeterman/pathfinderssh/internal/policy"
 	"github.com/scottpeterman/pathfinderssh/internal/product"
+	"github.com/scottpeterman/pathfinderssh/internal/psasync"
+	"github.com/scottpeterman/pathfinderssh/internal/pyrun"
 	"github.com/scottpeterman/pathfinderssh/internal/recent"
 	"github.com/scottpeterman/pathfinderssh/internal/scripts"
 	"github.com/scottpeterman/pathfinderssh/internal/serialx"
@@ -92,6 +100,8 @@ func main() {
 		verbose      = flag.Bool("v", false, "log applet progress to stderr")
 		doInstall   = flag.Bool("install", false, "copy into LocalAppData\\PathfinderSSH-MSP, create shortcuts, exit")
 		doUninstall = flag.Bool("uninstall", false, "remove LocalAppData\\PathfinderSSH-MSP install and shortcuts, exit")
+		doEnroll    = flag.Bool("enroll", false, "open setup wizard (OAuth app registration), then exit if combined with -install")
+		doSetup     = flag.String("setup", "", "access mode: solo (no cloud login), o365, google")
 		noInstall   = flag.Bool("no-install", false, "run from this folder without copying to AppData")
 		logoPath    = flag.String("logo", "", "override About/window logo PNG (also PATHFINDERSSH_LOGO or ~/.pathfinderssh/logo.png)")
 	)
@@ -118,8 +128,31 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if *doInstall {
+
+	setupMode := strings.TrimSpace(*doSetup)
+	if setupMode != "" && mspauth.HeadlessSetup(setupMode) {
+		if err := mspauth.SaveSoloSetup(ui.GetAppHome()); err != nil {
+			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
+			os.Exit(1)
+		}
+		if *doInstall || !*doEnroll {
+			fmt.Println("Solo mode — no Microsoft/Google sign-in required.")
+			if *doInstall {
+				fmt.Println("Installed to", appinstall.ExePath())
+			}
+			if !*doEnroll {
+				return
+			}
+		}
+	}
+
+	if *doInstall && !*doEnroll && setupMode == "" {
 		fmt.Println("Installed to", appinstall.ExePath())
+		return
+	}
+	if *doInstall && !*doEnroll && setupMode != "" && !mspauth.HeadlessSetup(setupMode) {
+		fmt.Println("Installed to", appinstall.ExePath())
+		fmt.Println("Run Pathfinder to finish", setupMode, "sign-in setup.")
 		return
 	}
 
@@ -179,6 +212,8 @@ func main() {
 		settingsPath: settingsPath,
 		vaultPath:    ui.ExpandHome(*vaultPath),
 		verbose:      *verbose,
+		forwards:     ui.NewForwardHub(),
+		guardedSend:  true,
 	}
 	if h.vaultPath == "" {
 		h.vaultPath = vaultcli.DefaultPath()
@@ -197,24 +232,14 @@ func main() {
 	}
 	h.node = sessions.Defaults()
 
-	h.shell.AddLauncher("Quick Connect", theme.ComputerIcon(), func() { h.launchTerminal(h.node) })
-	h.shell.AddLauncher("Crawl", theme.SearchIcon(), h.launchCrawl)
-	h.shell.AddLauncher("Capture", theme.DownloadIcon(), h.launchCapture)
-	h.shell.AddLauncher("Map", theme.GridIcon(), h.launchMap)
-	h.shell.AddLauncher("Search", theme.SearchReplaceIcon(), h.launchSearch)
-
-	// Tabs is not a launcher -- it acts on what is already open -- but it sits
-	// in the same bar because that is where a person looks for it. The menu
-	// form rather than three buttons: closing everything is rare enough that it
-	// should cost a deliberate second click, and a bare "Close All" button one
-	// pixel from "Terminal" is a mis-click that ends ten sessions.
-	h.shell.AddToolbar(h.tabsButton())
-
 	h.buildSessionTree(ui.ExpandHome(*sessionsPath))
-	h.buildMenu()
+	h.installShortcuts()
 
-	h.vaultBtn = ui.TipIconButtonLow("Unlock or manage the credential vault", theme.LoginIcon(), h.showVaultDialog)
-	h.shell.AddToolbar(h.vaultBtn)
+	h.mspEnrollOnStart = *doEnroll
+	if p, ok := mspauth.ParseSetupMode(setupMode); ok && p.RequiresCloudLogin() {
+		h.mspSetupPreset = p
+		h.mspEnrollOnStart = true
+	}
 
 	// Try the keyring and the environment before the window is up, and
 	// leave the vault LOCKED if neither has it. The old code called
@@ -226,6 +251,10 @@ func main() {
 	w.SetContent(ui.WithTooltips(h.shell.Content(), w.Canvas()))
 	w.SetMaster()
 	w.SetCloseIntercept(func() {
+		// Already tearing down — ignore further close-box events.
+		if h.shuttingDown {
+			return
+		}
 		// The close box stays live while a dialog is up, so without
 		// this a second click stacks a second confirmation -- and
 		// answering one of them then quits out from under the other,
@@ -240,10 +269,13 @@ func main() {
 		}
 		h.askingQuit = true
 		d := dialog.NewConfirm("Quit PathfinderSSH MSP?", msg, func(ok bool) {
-			h.askingQuit = false
-			if ok {
-				h.shutdown()
+			if !ok {
+				h.askingQuit = false
+				return
 			}
+			// Leave askingQuit set until shutdown flips shuttingDown so a
+			// second close-box click cannot open another dialog in between.
+			h.shutdown()
 		}, w)
 		d.SetConfirmText("Quit")
 		d.SetConfirmImportance(widget.DangerImportance)
@@ -262,8 +294,14 @@ func main() {
 	// The first-run vault warning goes here for the same reason: there has
 	// to be a window for it to appear in. It is silent on every machine
 	// that already has a vault.
-	h.offerVaultCreate()
-	h.offerFirstRunSetup()
+	h.runMSPAccessSetup(func() {
+		h.promptVaultUnlockIfNeeded()
+		h.offerVaultCreate()
+		h.offerFirstRunSetup()
+	})
+
+	h.auvikTunnels = auvik.NewTunnelManager(h.base.AuvikTunnelPath)
+	h.startAuvikPeriodicSync()
 
 	// Immediately before ShowAndRun, like an applet's Start: the watchdog
 	// hands work to fyne.Do and needs a running driver.
@@ -279,13 +317,13 @@ type host struct {
 	base ui.Settings
 
 	shell *ui.Shell
+	appChrome *ui.AppChrome
 
 	// vault is the one unlocked vault for this app session. Every applet
 	// shares it: the session dialog's credential picker, and both run
 	// builders, which are handed the open vault rather than a path so
 	// neither can decide to open one on its own.
 	vault    *vault.Vault
-	vaultBtn *ui.TipButton
 
 	creds  []string
 	lookup sessiondial.Lookup
@@ -317,6 +355,8 @@ type host struct {
 	// that keeps working when the next map is loaded into it.
 	maps   *mapweb.Server
 	mapDir string
+	// mapCustomer is the last customer selected in the map picker / crawl map path.
+	mapCustomer string
 
 	// askingQuit is true while the quit confirmation is on screen. UI
 	// goroutine only, like everything else the close intercept touches,
@@ -324,8 +364,37 @@ type host struct {
 	// a second writer that does not exist.
 	askingQuit bool
 
+	// shuttingDown is set once quit is committed. Prevents the close
+	// intercept from re-entering when win.Close() would otherwise fire it
+	// again (Fyne still honors SetCloseIntercept on programmatic Close).
+	shuttingDown bool
+
 	// scriptCancel stops an in-flight YAML script between steps.
 	scriptCancel atomic.Pointer[context.CancelFunc]
+
+	// forwards tracks SSH port forwards so session close / quit can stop them.
+	forwards *ui.ForwardHub
+
+	// guardedSend, when true, confirms before Send to all / customer.
+	guardedSend bool
+
+	// recorder captures keystrokes into scripts.yaml when non-nil and active.
+	recorder *scripts.Recorder
+
+	// Auvik periodic sync and tunnel helper.
+	auvikSyncCancel context.CancelFunc
+	auvikTunnels    *auvik.TunnelManager
+
+	// Cursor AI side pane (Troubleshoot addon).
+	cursorPaneVisible bool
+	cursorPane        fyne.CanvasObject
+
+	// MSP org enrollment + engineer sign-in (mspauth hooks).
+	mspAuth       *mspauth.Authenticator
+	mspEnrollment mspauth.Enrollment
+	mspSession    mspauth.UserSession
+	mspEnrollOnStart bool
+	mspSetupPreset   mspauth.Provider
 }
 
 // shutdown ends the application: applets first, then the map server, then the
@@ -336,17 +405,51 @@ type host struct {
 // drift is that quitting past a warning skips a teardown that quitting
 // without one performs.
 func (h *host) shutdown() {
+	if h.shuttingDown {
+		return
+	}
+	h.shuttingDown = true
+	h.askingQuit = false
+
+	// Must clear the intercept before Close. Otherwise Close re-invokes the
+	// intercept: Busy() still sees live sessions (OnClose is async), the quit
+	// dialog comes back, and the app never leaves ShowAndRun.
+	h.win.SetCloseIntercept(nil)
+
+	h.shell.StopFocusWatch()
+
 	// Tear the applets down before the window goes. Closing a transport
 	// can block, so each instance's OnClose already runs on its own
 	// goroutine -- this just makes sure they all start.
 	h.shell.CloseAll()
+	if h.forwards != nil {
+		h.forwards.StopAll()
+	}
+	if h.auvikTunnels != nil {
+		h.auvikTunnels.StopAll()
+	}
+	if h.auvikSyncCancel != nil {
+		h.auvikSyncCancel()
+	}
 	// Stop answering the browser. A map left open in a tab after the
 	// application exits should fail honestly rather than look live until
 	// something is clicked.
 	if h.maps != nil {
 		_ = h.maps.Close()
 	}
+
+	// Last-resort exit: GLFW/Fyne has been observed to never return from
+	// Quit when a serial/SSH close is wedged in the driver. Prefer a clean
+	// Quit; force the process out if the run loop stays stuck.
+	go func() {
+		time.Sleep(2 * time.Second)
+		os.Exit(0)
+	}()
+
 	h.win.Close()
+	// Ensure the Fyne run loop exits even if a detached window or driver
+	// quirk left the master window in a half-closed state.
+	h.app.Quit()
 }
 
 func (h *host) logf() func(string, ...any) { return h.logfIf(false) }
@@ -502,8 +605,11 @@ func (h *host) buildSessionTree(path string) {
 	})
 	h.tree.SetTree(tr)
 	h.shell.SetSide(h.tree.Content(), 0.25)
-	h.installButtonBar()
-	h.installScriptsBar()
+	h.buildChrome()
+	if h.base.TroubleshootAddon {
+		h.cursorPaneVisible = true
+		h.applyCursorPane()
+	}
 
 
 	if err != nil {
@@ -661,38 +767,19 @@ func (h *host) saveTree(tr sessions.Tree) {
 // shape for that panel — a quarter-width column of icons is for the things done
 // constantly, and importing an estate is done once and then not again for
 // months.
-// tabsButton is the toolbar entry for acting on open tabs.
+// tabsButton is the toolbar entry for switching and closing open tabs.
 //
-// The items are greyed rather than hidden when they do not apply: a control
-// that disappears when there is nothing to close is a control nobody learns
-// is there.
+// When nothing is open the menu still shows a clear “No tabs open” line —
+// an all-disabled Close menu looked blank on Windows. With sessions open it
+// lists them so you can jump to one, then the close actions underneath.
+// tabsButton kept for tests; ribbon uses showTabsMenu.
 func (h *host) tabsButton() *ui.TipButton {
 	var btn *ui.TipButton
 	btn = ui.TipButtonLabeled("Tabs", theme.ListIcon(), func() {
-		open := h.shell.TabCount()
-		current := h.shell.Current()
-
-		closeTab := fyne.NewMenuItem("Close Tab", h.shell.CloseCurrent)
-		closeTab.Disabled = current == nil
-
-		closeOthers := fyne.NewMenuItem("Close Other Tabs", func() {
-			h.confirmClose("Close other tabs?", open-1, func() {
-				h.shell.CloseOthers(current)
-			})
-		})
-		closeOthers.Disabled = current == nil || open <= 1
-
-		closeAll := fyne.NewMenuItem("Close All Tabs", func() {
-			h.confirmClose("Close all tabs?", open, h.shell.CloseAll)
-		})
-		closeAll.Disabled = open == 0
-
-		menu := fyne.NewMenu("", closeTab, fyne.NewMenuItemSeparator(), closeOthers, closeAll)
-		widget.ShowPopUpMenuAtRelativePosition(
-			menu, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
+		h.showTabsMenu(btn)
 	})
 	btn.Importance = widget.LowImportance
-	btn.SetToolTip("Close tabs")
+	btn.SetToolTip("Switch or close open tabs")
 	return btn
 }
 
@@ -719,56 +806,211 @@ func (h *host) confirmClose(title string, n int, do func()) {
 	}, h.win)
 }
 
-func (h *host) buildMenu() {
-	fileItems := []*fyne.MenuItem{
-		fyne.NewMenuItem("Settings…", h.showSettings),
-		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Import session YAML…", h.importSessions),
-		fyne.NewMenuItem("Import topology map…", h.importMap),
-		fyne.NewMenuItem("Import SecureCRT sessions…", h.importSecureCRT),
-		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Export session YAML…", h.exportSessions),
+func (h *host) buildChrome() {
+	if h.shell == nil {
+		return
 	}
-	if runtime.GOOS == "windows" {
-		fileItems = append(fileItems,
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Install / update AppData copy…", h.installDesktopShortcuts),
-			fyne.NewMenuItem("Uninstall AppData copy…", h.uninstallDesktop),
-		)
+	if h.appChrome != nil {
+		h.appChrome.SetConnected(h.hasConnectedTerminal())
+		h.refreshVault()
+		return
 	}
-	file := fyne.NewMenu("File", fileItems...)
 
-	sessionMenu := fyne.NewMenu("Session",
-		fyne.NewMenuItem("Transfer files (SFTP)…", h.openFileTransfer),
-		fyne.NewMenuItem("Run script…", h.runScriptDialog),
-		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Start / stop capture…", h.toggleCurrentCapture),
-		fyne.NewMenuItem("Save scrollback…", h.saveCurrentScrollback),
-	)
+	path := buttons.Path(ui.GetAppHome())
+	btnFile, err := buttons.Load(path)
+	if err != nil {
+		btnFile = buttons.Defaults()
+	}
+	if len(btnFile.Buttons) > 0 {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			_ = buttons.Save(path, btnFile)
+		}
+	}
 
-	// A menu as well as the toolbar button. The toolbar answers "is the
-	// vault open"; managing what is IN it is a different question, and
-	// hanging it off the same button would mean either a dialog that asks
-	// which of the two you meant or a lock action one misclick away from a
-	// credential list.
-	vaultMenu := fyne.NewMenu("Vault",
-		fyne.NewMenuItem("Manage credentials…", h.manageVault),
-		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Unlock / lock…", h.showVaultDialog),
-	)
-
-	// No Quit item: Fyne appends one to the first menu itself, and its
-	// action goes through the window's close intercept — so the applet
-	// teardown in SetCloseIntercept still runs. Adding one here would
-	// either duplicate it or replace it with a quit that skipped that.
-	helpMenu := fyne.NewMenu("Help",
-		fyne.NewMenuItem("Quickstart", func() { ui.ShowHelp(h.win, helpdoc.TopicQuickstart) }),
-		fyne.NewMenuItem("Contents", func() { ui.ShowHelp(h.win, "") }),
-		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("About "+ui.DefaultAppName+"…", h.showAbout),
-	)
-	h.win.SetMainMenu(fyne.NewMainMenu(file, sessionMenu, vaultMenu, helpMenu))
+	h.appChrome = ui.BuildAppChrome(ui.AppChromeConfig{
+		OnQuickConnect: func() { h.launchTerminal(h.node) },
+		OnCrawl:        h.launchCrawl,
+		OnCapture:      h.launchCapture,
+		OnMap:          h.launchMap,
+		OnSearch:       h.launchSearch,
+		ScriptsMenu:    h.showScriptsMenu,
+		TabsMenu:       h.showTabsMenu,
+		OnSettings:     h.showSettings,
+		Customers:      h.customerNames(),
+		ShowSendDock:   h.hasConnectedTerminal(),
+		OnSendChat: func(text string, mode ui.ChatSendMode, customer string) {
+			h.sendChat(text, mode, customer)
+		},
+		BarButtons: btnFile.Buttons,
+		OnBarAction: func(b buttons.Button, all bool) { h.barButtonAction(b, all) },
+		OnBarEdit: func() {
+			scriptPath := scripts.Path(ui.GetAppHome())
+			dialog.ShowInformation("Button bar",
+				"Edit "+path+" and restart Pathfinder.\n\n"+
+					"Send a command:\n  label: Show run\n  send: show running-config\\n\n"+
+					"Run a script (from "+scriptPath+"):\n  label: Backup\n  script: My Script Name\n\n"+
+					"Optional: scope: all  (or check All tabs when clicking)",
+				h.win)
+		},
+		Status:         h.shell.SummaryLabel(),
+		ShowCursorAI:   h.base.TroubleshootAddon,
+		CursorAIOpen:   h.cursorPaneVisible,
+		OnCursorAI:     h.toggleCursorPane,
+	})
+	h.shell.SetTopChrome(h.appChrome.Top())
+	h.shell.SetBottom(h.appChrome.Bottom())
+	h.refreshVault()
 }
+
+func (h *host) refreshOpsChrome() {
+	if h.shell == nil {
+		return
+	}
+	h.buildChrome()
+	// Do NOT RefocusCurrentTerminal here. This runs from the connect state
+	// handler while the Connecting dialog may still be an overlay; focusing
+	// under it makes the new SSH tab permanently ignore the keyboard.
+	// Shell settle() + the focus watchdog reclaim focus once overlays clear.
+}
+
+func (h *host) hasConnectedTerminal() bool {
+	if h.shell == nil {
+		return false
+	}
+	for _, inst := range h.shell.Instances() {
+		if inst == nil {
+			continue
+		}
+		ta, ok := inst.Applet().(*termApplet)
+		if ok && ta.sess != nil && ta.sess.Connected() {
+			return true
+		}
+	}
+	return false
+}
+
+// buildRibbon is replaced by buildChrome.
+func (h *host) buildRibbon() { h.buildChrome() }
+
+func (h *host) showTabsMenu(anchor fyne.CanvasObject) {
+	open := h.shell.TabCount()
+	current := h.shell.Current()
+	items := make([]*fyne.MenuItem, 0, open+5)
+
+	if open == 0 {
+		none := fyne.NewMenuItem("No tabs open", nil)
+		none.Disabled = true
+		items = append(items, none)
+	} else {
+		for _, inst := range h.shell.Instances() {
+			inst := inst
+			label := inst.Title()
+			if label == "" {
+				label = "(untitled)"
+			}
+			if current != nil && inst == current {
+				label = "• " + label
+			}
+			items = append(items, fyne.NewMenuItem(label, func() {
+				h.shell.Activate(inst)
+			}))
+		}
+		items = append(items, fyne.NewMenuItemSeparator())
+	}
+
+	closeTab := fyne.NewMenuItem("Close Tab", h.shell.CloseCurrent)
+	closeTab.Disabled = current == nil
+
+	closeOthers := fyne.NewMenuItem("Close Other Tabs", func() {
+		h.confirmClose("Close other tabs?", open-1, func() {
+			h.shell.CloseOthers(current)
+		})
+	})
+	closeOthers.Disabled = current == nil || open <= 1
+
+	closeAll := fyne.NewMenuItem("Close All Tabs", func() {
+		h.confirmClose("Close all tabs?", open, h.shell.CloseAll)
+	})
+	closeAll.Disabled = open == 0
+
+	items = append(items, closeTab, closeOthers, closeAll)
+	items = append(items, fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Tile / untile terminals", func() { h.shell.ToggleTileLayout() }),
+	)
+	menu := fyne.NewMenu("", items...)
+	widget.ShowPopUpMenuAtRelativePosition(
+		menu, h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
+}
+
+func (h *host) showScriptsMenu(anchor fyne.CanvasObject) {
+	f := h.loadScripts()
+	menuItems := make([]*fyne.MenuItem, 0, len(f.Scripts)+8)
+	for _, sc := range f.Scripts {
+		sc := sc
+		menuItems = append(menuItems, fyne.NewMenuItem(sc.Name, func() {
+			h.runNamedScript(sc.Name)
+		}))
+	}
+	if len(f.Scripts) > 0 {
+		menuItems = append(menuItems, fyne.NewMenuItemSeparator())
+	}
+	menuItems = append(menuItems,
+		fyne.NewMenuItem("Run script…", h.runScriptDialog),
+		fyne.NewMenuItem("Script editor…", h.openScriptEditor),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Start recording…", h.startScriptRecording),
+		fyne.NewMenuItem("Stop recording…", h.stopScriptRecording),
+		fyne.NewMenuItem("Run Python script…", h.runPythonScript),
+	)
+	m := fyne.NewMenu("", menuItems...)
+	widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
+}
+
+func (h *host) showSessionMenu(anchor fyne.CanvasObject, sess *ui.Session, inst *ui.Instance, label string) {
+	items := []*fyne.MenuItem{
+		fyne.NewMenuItem("Transfer files (SFTP)…", func() {
+			h.openSFTPTab(sess, "SFTP — "+label)
+		}),
+		fyne.NewMenuItem("Port forwards…", func() {
+			client, ok := sess.SSHClient()
+			if !ok || client == nil {
+				dialog.ShowInformation("Port forwards", "Port forwards require an SSH session.", h.win)
+				return
+			}
+			ui.ShowPortForwardDialog(h.win, "Port forwards — "+label, client, h.forwards)
+		}),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Run script into this session…", func() {
+			h.shell.Activate(inst)
+			h.runScriptDialog()
+		}),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Start / stop capture…", func() {
+			_, msg := sess.ToggleLogging()
+			if msg != "" {
+				dialog.ShowInformation("Session Capture", msg, h.win)
+			}
+		}),
+		fyne.NewMenuItem("Save scrollback…", func() { sess.PromptSaveScrollback() }),
+		fyne.NewMenuItem("Pack ticket evidence…", func() { h.packSessionEvidence(sess, label) }),
+	}
+	widget.ShowPopUpMenuAtRelativePosition(
+		fyne.NewMenu("", items...), h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
+}
+
+func (h *host) showImportMenu(anchor fyne.CanvasObject) {
+	items := []*fyne.MenuItem{
+		fyne.NewMenuItem("Session YAML…", h.importSessions),
+		fyne.NewMenuItem("Topology map…", h.importMap),
+		fyne.NewMenuItem("SecureCRT sessions…", h.importSecureCRT),
+		fyne.NewMenuItem("Customer crawl seeds (CSV)…", h.importCustomerCrawlCSV),
+	}
+	widget.ShowPopUpMenuAtRelativePosition(
+		fyne.NewMenu("", items...), h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
+}
+
+// buildMenu is replaced by buildChrome.
+func (h *host) buildMenu() { h.buildChrome() }
 
 func (h *host) currentTerminal() *ui.Session {
 	inst := h.shell.Current()
@@ -809,16 +1051,51 @@ func (h *host) openFileTransfer() {
 		dialog.ShowInformation("File Transfer", "Open an SSH terminal session first.", h.win)
 		return
 	}
+	title := "SFTP"
+	if inst := h.shell.Current(); inst != nil {
+		title = "SFTP — " + inst.Title()
+	}
+	h.openSFTPTab(sess, title)
+}
+
+func (h *host) openSFTPTab(sess *ui.Session, title string) {
 	client, ok := sess.SSHClient()
 	if !ok || client == nil {
 		dialog.ShowInformation("File Transfer", "SFTP requires an SSH session (not telnet or serial).", h.win)
 		return
 	}
-	title := "File Transfer (SFTP)"
-	if inst := h.shell.Current(); inst != nil {
-		title = "Files — " + inst.Title()
+	view, err := ui.NewSFTPView(h.win, client)
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		return
 	}
-	ui.ShowSFTPDialog(h.win, title, client)
+	if title == "" {
+		title = "SFTP"
+	}
+	h.shell.Open(ui.Mount{
+		Kind:   ui.KindSFTP,
+		Title:  title,
+		Applet: view,
+		Busy:   func() string { return "" },
+	})
+}
+
+func (h *host) openPortForwards() {
+	sess := h.currentTerminal()
+	if sess == nil {
+		dialog.ShowInformation("Port forwards", "Open an SSH terminal session first.", h.win)
+		return
+	}
+	client, ok := sess.SSHClient()
+	if !ok || client == nil {
+		dialog.ShowInformation("Port forwards", "Port forwards require an SSH session.", h.win)
+		return
+	}
+	title := "Port forwards"
+	if inst := h.shell.Current(); inst != nil {
+		title = "Port forwards — " + inst.Title()
+	}
+	ui.ShowPortForwardDialog(h.win, title, client, h.forwards)
 }
 
 func (h *host) loadScripts() scripts.File {
@@ -843,15 +1120,56 @@ type scriptSend struct{ h *host }
 func (s scriptSend) SendActive(text string) { s.h.shell.SendToActive(text) }
 func (s scriptSend) SendAll(text string)    { s.h.shell.SendToAllTerminals(text) }
 
+func (s scriptSend) WaitForPattern(ctx context.Context, pattern string, regex bool, timeout time.Duration) error {
+	sess := s.h.activeScriptSession()
+	if sess == nil {
+		return fmt.Errorf("no active SSH session")
+	}
+	return sess.WaitForPattern(ctx, pattern, regex, timeout)
+}
+
+// activeScriptSession returns the Session mounted in the active terminal tab.
+func (h *host) activeScriptSession() *ui.Session {
+	if h == nil || h.shell == nil {
+		return nil
+	}
+	cur := h.shell.ActiveTerminal()
+	if cur == nil {
+		return nil
+	}
+	if ta, ok := cur.Applet().(*termApplet); ok {
+		return ta.sess
+	}
+	return nil
+}
+
 func (h *host) runScriptDialog() {
 	ui.ShowRunScriptDialog(h.win, h.loadScripts(), h.scriptSender(), &h.scriptCancel)
 }
 
+func (h *host) openScriptEditor() {
+	path := scripts.Path(ui.GetAppHome())
+	ui.ShowScriptEditor(h.win, ui.ScriptEditorOptions{
+		Path: path,
+		File: h.loadScripts(),
+		OnSaved: func(scripts.File) {
+			// Menu is rebuilt on each Scripts button tap from disk.
+		},
+	})
+}
+
 func (h *host) runNamedScript(name string) {
+	h.runNamedScriptScoped(name, false)
+}
+
+func (h *host) runNamedScriptScoped(name string, allTabs bool) {
 	f := h.loadScripts()
 	for _, sc := range f.Scripts {
 		if sc.Name != name {
 			continue
+		}
+		if allTabs {
+			sc.Scope = "all"
 		}
 		if prev := h.scriptCancel.Load(); prev != nil {
 			(*prev)()
@@ -872,33 +1190,10 @@ func (h *host) runNamedScript(name string) {
 	dialog.ShowInformation("Scripts", "Script not found: "+name, h.win)
 }
 
-// installScriptsBar loads ~/.pathfinderssh/scripts.yaml onto the toolbar.
-func (h *host) installScriptsBar() {
-	f := h.loadScripts()
-	path := scripts.Path(ui.GetAppHome())
-	menuItems := make([]*fyne.MenuItem, 0, len(f.Scripts)+3)
-	for _, sc := range f.Scripts {
-		sc := sc
-		menuItems = append(menuItems, fyne.NewMenuItem(sc.Name, func() {
-			h.runNamedScript(sc.Name)
-		}))
-	}
-	if len(menuItems) > 0 {
-		menuItems = append(menuItems, fyne.NewMenuItemSeparator())
-	}
-	menuItems = append(menuItems, fyne.NewMenuItem("Run script…", h.runScriptDialog))
-	menuItems = append(menuItems, fyne.NewMenuItem("Edit scripts.yaml…", func() {
-		dialog.ShowInformation("Scripts", "Edit "+path+" and restart Pathfinder.\nEach step: send + optional delay_ms. Use \\n for Return.\nscope: active|all", h.win)
-	}))
-	btn := ui.TipButtonLabeled("Scripts", theme.DocumentIcon(), nil)
-	btn.OnTapped = func() {
-		m := fyne.NewMenu("", menuItems...)
-		widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
-	}
-	btn.Importance = widget.LowImportance
-	btn.SetToolTip("Run YAML scripts into the terminal")
-	h.shell.AddToolbar(btn)
-}
+// installButtonBar, installOpsStrip, installScriptsBar — folded into buildRibbon.
+func (h *host) installButtonBar()  {}
+func (h *host) installOpsStrip()   {}
+func (h *host) installScriptsBar() {}
 
 // pickFile opens a read picker filtered to one set of extensions and hands the
 // whole file to use. Reading here rather than in each caller keeps the three
@@ -1027,80 +1322,802 @@ func (h *host) importSecureCRT() {
 	}()
 }
 
-// installButtonBar loads ~/.pathfinderssh/buttons.yaml and puts send actions
-// on the shell toolbar. Scope "all" fans out to every open terminal tab.
-func (h *host) installButtonBar() {
-	path := buttons.Path(ui.GetAppHome())
-	f, err := buttons.Load(path)
-	if err != nil {
-		log.Printf("[buttons] %v", err)
+func (h *host) sendChat(text string, mode ui.ChatSendMode, customer string) {
+	if ok, reason := h.allowSend(); !ok {
+		dialog.ShowInformation("Send blocked", reason, h.win)
 		return
 	}
-	if len(f.Buttons) == 0 {
+	switch mode {
+	case ui.ChatSendAll:
+		h.confirmFanOut("Send to all open terminals?", func() {
+			h.shell.SendToAllTerminals(text)
+		})
+	case ui.ChatSendCustomer:
+		cust := customer
+		h.confirmFanOut("Send to all open terminals for customer "+cust+"?", func() {
+			h.shell.SendToMatching(text, func(meta ui.TerminalMeta) bool {
+				return strings.EqualFold(meta.CustomerName(), cust)
+			})
+		})
+	default:
+		if !h.shell.SendToActive(text) {
+			dialog.ShowInformation("Send", "No SSH session to send to.", h.win)
+			return
+		}
+		h.shell.RefocusCurrentTerminal()
+	}
+}
+
+func (h *host) confirmFanOut(msg string, do func()) {
+	if !h.guardedSend {
+		do()
 		return
 	}
-	// Persist defaults on first run so the file is discoverable.
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		_ = buttons.Save(path, f)
-	}
-	menuItems := make([]*fyne.MenuItem, 0, len(f.Buttons)+2)
-	for _, b := range f.Buttons {
-		b := b
-		menuItems = append(menuItems, fyne.NewMenuItem(b.Label, func() {
-			h.sendButton(b)
-		}))
-	}
-	menuItems = append(menuItems, fyne.NewMenuItemSeparator())
-	menuItems = append(menuItems, fyne.NewMenuItem("Edit buttons.yaml…", func() {
-		dialog.ShowInformation("Button bar", "Edit "+path+" and restart Pathfinder.\nUse \\n for Return.", h.win)
-	}))
-	btn := ui.TipButtonLabeled("Buttons", theme.MailSendIcon(), nil)
-	btn.OnTapped = func() {
-		m := fyne.NewMenu("", menuItems...)
-		widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, btn.Size().Height), btn)
-	}
-	btn.Importance = widget.LowImportance
-	btn.SetToolTip("Send button-bar macros to the terminal")
-	h.shell.AddToolbar(btn)
+	dialog.ShowConfirm("Guarded send", msg, func(ok bool) {
+		if ok {
+			do()
+		}
+	}, h.win)
 }
 
 func (h *host) sendButton(b buttons.Button) {
-	text := b.Send
+	h.sendButtonScoped(b, strings.EqualFold(b.Scope, "all"))
+}
+
+func (h *host) barButtonAction(b buttons.Button, all bool) {
+	if strings.TrimSpace(b.Script) != "" {
+		h.runNamedScriptScoped(b.Script, all || strings.EqualFold(b.Scope, "all"))
+		return
+	}
+	h.sendButtonScoped(b, all)
+}
+
+func (h *host) sendButtonScoped(b buttons.Button, all bool) {
+	text := strings.TrimRight(b.Send, "\r\n")
 	if text == "" {
 		return
 	}
-	if strings.EqualFold(b.Scope, "all") {
-		h.shell.SendToAllTerminals(text)
+	// Enter key in the terminal is CR; append that (NormalizeTerminalSend also
+	// maps any YAML \n to \r inside SendToActive / SendToAllTerminals).
+	text += "\r"
+	if ok, reason := h.allowSend(); !ok {
+		dialog.ShowInformation("Send blocked", reason, h.win)
 		return
 	}
-	h.shell.SendToActive(text)
+	if all {
+		h.confirmFanOut("Send button \""+b.Label+"\" to all open terminals?", func() {
+			h.shell.SendToAllTerminals(text)
+		})
+		return
+	}
+	if !h.shell.SendToActive(text) {
+		dialog.ShowInformation("Send", "No SSH session to send to (or send was blocked).", h.win)
+		return
+	}
+	h.shell.EnsureTerminalFocus()
 }
 
-// importMap turns a crawl's map.json into sessions.
-//
-// One flat folder per import, because a map has no structure worth keeping —
-// the person's folders are theirs to make, and a crawl has no opinion about
-// which of 600 devices belong together.
+func (h *host) allowSend() (bool, string) {
+	p := policy.Policy{
+		ReadOnly:          h.base.ReadOnlyMode,
+		ChangeWindowStart: h.base.ChangeWindowStart,
+		ChangeWindowEnd:   h.base.ChangeWindowEnd,
+	}
+	return p.Allow(time.Now())
+}
+
+func (h *host) startScriptRecording() {
+	name := widget.NewEntry()
+	name.SetText("Recorded " + time.Now().Format("15:04"))
+	dialog.ShowForm("Start script recording", "Record", "Cancel", []*widget.FormItem{
+		{Text: "Script name", Widget: name},
+	}, func(ok bool) {
+		if !ok {
+			return
+		}
+		h.recorder = scripts.NewRecorder(name.Text)
+		dialog.ShowInformation("Recording", "Keystrokes and button/script sends are being recorded.\nSession → Stop script recording… to save.", h.win)
+	}, h.win)
+}
+
+func (h *host) stopScriptRecording() {
+	if h.recorder == nil || !h.recorder.Active() {
+		dialog.ShowInformation("Recording", "No recording in progress.", h.win)
+		return
+	}
+	h.recorder.Stop()
+	s := h.recorder.Script()
+	h.recorder = nil
+	if len(s.Steps) == 0 {
+		dialog.ShowInformation("Recording", "Nothing was captured.", h.win)
+		return
+	}
+	path := scripts.Path(ui.GetAppHome())
+	f := h.loadScripts()
+	f = scripts.Upsert(f, s)
+	if err := scripts.Save(path, f); err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	dialog.ShowInformation("Recording saved", fmt.Sprintf("Saved %q (%d steps) to %s", s.Name, len(s.Steps), path), h.win)
+}
+
+func (h *host) runPythonScript() {
+	sess := h.currentTerminal()
+	if sess == nil {
+		dialog.ShowInformation("Python", "Open a terminal session first.", h.win)
+		return
+	}
+	if ok, reason := h.allowSend(); !ok {
+		dialog.ShowInformation("Send blocked", reason, h.win)
+		return
+	}
+	open := dialog.NewFileOpen(func(uc fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, h.win)
+			return
+		}
+		if uc == nil {
+			return
+		}
+		path := uc.URI().Path()
+		_ = uc.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		prev := h.scriptCancel.Swap(&cancel)
+		if prev != nil && *prev != nil {
+			(*prev)()
+		}
+		go func() {
+			err := pyrun.Run(ctx, "", path, pyrun.Callbacks{
+				Send: func(text string) error {
+					if !sess.SendUser([]byte(text)) {
+						return fmt.Errorf("send blocked by policy")
+					}
+					return nil
+				},
+				WaitFor: func(ctx context.Context, pattern string, timeout time.Duration) error {
+					return sess.WaitForPattern(ctx, pattern, false, timeout)
+				},
+			})
+			fyne.Do(func() {
+				if err != nil && ctx.Err() == nil {
+					dialog.ShowError(err, h.win)
+				}
+			})
+		}()
+	}, h.win)
+	open.SetFilter(storage.NewExtensionFileFilter([]string{".py"}))
+	open.Resize(fyne.NewSize(820, 600))
+	open.Show()
+}
+
+func (h *host) installShortcuts() {
+	c := h.win.Canvas()
+	add := func(key fyne.KeyName, mod fyne.KeyModifier, fn func()) {
+		sc := &desktop.CustomShortcut{KeyName: key, Modifier: mod}
+		c.AddShortcut(sc, func(fyne.Shortcut) { fn() })
+	}
+	add(fyne.KeyW, fyne.KeyModifierControl, func() {
+		h.shell.CloseCurrent()
+	})
+	add(fyne.KeyTab, fyne.KeyModifierControl, func() {
+		h.shell.SelectNextTab()
+	})
+	add(fyne.KeyTab, fyne.KeyModifierControl|fyne.KeyModifierShift, func() {
+		h.shell.SelectPrevTab()
+	})
+	add(fyne.KeyL, fyne.KeyModifierControl, func() {
+		// Focus tree filter when present.
+		if h.tree != nil {
+			h.tree.FocusFilter()
+		}
+	})
+}
+
+func (h *host) toggleGuardedSend() {
+	h.guardedSend = !h.guardedSend
+	state := "off"
+	if h.guardedSend {
+		state = "on"
+	}
+	dialog.ShowInformation("Guarded multi-send", "Confirm before Send to all / customer is now "+state+".", h.win)
+}
+
+func (h *host) packTicketEvidence() {
+	ticket := widget.NewEntry()
+	ticket.SetPlaceHolder("ticket / change ID")
+	dialog.ShowForm("Pack ticket evidence", "Save zip…", "Cancel", []*widget.FormItem{
+		{Text: "Ticket", Widget: ticket},
+	}, func(ok bool) {
+		if !ok {
+			return
+		}
+		var files []evidence.File
+		for _, inst := range h.shell.Instances() {
+			if inst == nil {
+				continue
+			}
+			ta, ok := inst.Applet().(*termApplet)
+			if !ok || ta.sess == nil {
+				continue
+			}
+			text := ta.sess.ScrollbackText()
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			files = append(files, evidence.File{
+				Name:    inst.Title() + ".txt",
+				Content: []byte(text),
+			})
+		}
+		if len(files) == 0 {
+			dialog.ShowInformation("Evidence pack", "No open terminals with scrollback.", h.win)
+			return
+		}
+		suggested := filepath.Join(ui.GetLogsDir(), "evidence-"+time.Now().Format("20060102-150405")+".zip")
+		save := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			if wc == nil {
+				return
+			}
+			path := wc.URI().Path()
+			_ = wc.Close()
+			if err := evidence.WriteZip(path, ticket.Text, files); err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			dialog.ShowInformation("Evidence pack", fmt.Sprintf("Wrote %d scrollback(s) to %s", len(files), path), h.win)
+		}, h.win)
+		save.SetFileName(filepath.Base(suggested))
+		save.Resize(fyne.NewSize(820, 600))
+		save.Show()
+	}, h.win)
+}
+
+func (h *host) packSessionEvidence(sess *ui.Session, title string) {
+	if sess == nil {
+		return
+	}
+	text := sess.ScrollbackText()
+	if strings.TrimSpace(text) == "" {
+		dialog.ShowInformation("Evidence pack", "No scrollback to save for this session.", h.win)
+		return
+	}
+	ticket := widget.NewEntry()
+	ticket.SetPlaceHolder("ticket / change ID")
+	dialog.ShowForm("Pack ticket evidence", "Save zip…", "Cancel", []*widget.FormItem{
+		{Text: "Ticket", Widget: ticket},
+	}, func(ok bool) {
+		if !ok {
+			return
+		}
+		safe := strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+				return r
+			}
+			return '_'
+		}, title)
+		suggested := filepath.Join(ui.GetLogsDir(), "evidence-"+safe+"-"+time.Now().Format("20060102-150405")+".zip")
+		save := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			if wc == nil {
+				return
+			}
+			path := wc.URI().Path()
+			_ = wc.Close()
+			files := []evidence.File{{Name: title + ".txt", Content: []byte(text)}}
+			if err := evidence.WriteZip(path, ticket.Text, files); err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			dialog.ShowInformation("Evidence pack", "Wrote scrollback to "+path, h.win)
+		}, h.win)
+		save.SetFileName(filepath.Base(suggested))
+		save.Resize(fyne.NewSize(820, 600))
+		save.Show()
+	}, h.win)
+}
+
+func (h *host) showCursorAccount() {
+	ui.ShowCursorAccountDialog(h.win, h.base.CursorAPIKey)
+}
+
+// refreshTroubleshootChrome rebuilds the ribbon when the addon toggles.
+func (h *host) refreshTroubleshootChrome() {
+	if h.shell == nil {
+		return
+	}
+	h.buildChrome()
+	h.applyCursorPane()
+	if c := h.shell.Content(); c != nil {
+		c.Refresh()
+	}
+}
+
+func (h *host) toggleCursorPane() {
+	if !h.base.TroubleshootAddon {
+		dialog.ShowInformation("Cursor AI",
+			"Enable Troubleshoot addon in Settings → Tools first.", h.win)
+		return
+	}
+	h.cursorPaneVisible = !h.cursorPaneVisible
+	h.buildChrome()
+	h.applyCursorPane()
+}
+
+func (h *host) applyCursorPane() {
+	if h.shell == nil {
+		return
+	}
+	if !h.base.TroubleshootAddon || !h.cursorPaneVisible {
+		h.shell.SetRight(nil, 0)
+		return
+	}
+	if h.cursorPane == nil {
+		h.cursorPane = ui.NewCursorPane(h.win, h.cursorPaneHooks())
+	}
+	off := h.shell.RightOffset()
+	if off <= 0 {
+		off = 0.72
+	}
+	h.shell.SetRight(h.cursorPane, off)
+}
+
+func (h *host) activeSessionContext() string {
+	inst := h.shell.Current()
+	if inst == nil {
+		return ui.FormatActiveContext("", "", "", "", false)
+	}
+	ta, ok := inst.Applet().(*termApplet)
+	if !ok || ta.sess == nil {
+		return ui.FormatActiveContext(inst.Title(), "", "", "", false)
+	}
+	return ui.FormatActiveContext(inst.Title(), ta.customer, ta.folder, ta.sess.TargetLabel(), true)
+}
+
+func (h *host) gatherScrollback(all bool) (string, error) {
+	if !all {
+		sess := h.currentTerminal()
+		if sess == nil {
+			return "", fmt.Errorf("no active terminal")
+		}
+		return sess.ScrollbackText(), nil
+	}
+	var b strings.Builder
+	for _, inst := range h.shell.Instances() {
+		if inst == nil {
+			continue
+		}
+		ta, ok := inst.Applet().(*termApplet)
+		if !ok || ta.sess == nil {
+			continue
+		}
+		fmt.Fprintf(&b, "----- %s -----\n%s\n\n", inst.Title(), ta.sess.ScrollbackText())
+	}
+	if b.Len() == 0 {
+		return "", fmt.Errorf("no terminal scrollbacks")
+	}
+	return b.String(), nil
+}
+
+func (h *host) sendToActiveSession(cmd string) error {
+	if !h.shell.SendToActive(cmd) {
+		return fmt.Errorf("no active terminal or send rejected")
+	}
+	return nil
+}
+
+func (h *host) askCursorAgent(prompt string) (string, error) {
+	cli := cursorapi.New(h.base.CursorAPIKey)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := cli.CreateAgent(ctx, cursorapi.CreateAgentRequest{
+		Prompt: cursorapi.CreatePrompt{Text: prompt},
+		Name:   "PathfinderSSH troubleshoot",
+	})
+	if err != nil {
+		return "", err
+	}
+	msg := fmt.Sprintf("Agent %s (%s) · run %s (%s)",
+		out.Agent.ID, out.Agent.Status, out.Run.ID, out.Run.Status)
+	if out.Agent.URL != "" {
+		msg += "\n" + out.Agent.URL
+	}
+	return msg, nil
+}
+
+func (h *host) cursorPaneHooks() ui.CursorPaneHooks {
+	return ui.CursorPaneHooks{
+		APIKey:           h.base.CursorAPIKey,
+		ActiveContext:    h.activeSessionContext,
+		GatherScrollback: h.gatherScrollback,
+		SendToActive:     h.sendToActiveSession,
+		ScriptNames: func() []string {
+			f := h.loadScripts()
+			names := make([]string, 0, len(f.Scripts))
+			for _, s := range f.Scripts {
+				names = append(names, s.Name)
+			}
+			return names
+		},
+		RunScript: func(name string) error {
+			h.runNamedScript(name)
+			return nil
+		},
+		AskCursor: h.askCursorAgent,
+	}
+}
+
+func (h *host) showTroubleshootAgent() {
+	if !h.base.TroubleshootAddon {
+		dialog.ShowInformation("Troubleshoot addon",
+			"Enable it in Settings → Tools → Enable addon.", h.win)
+		return
+	}
+	ui.ShowTroubleshootAgent(h.win, ui.TroubleshootHooks{
+		Enabled: true,
+		APIKey:  h.base.CursorAPIKey,
+		ListSessions: func() []ui.TroubleshootSession {
+			cur := h.shell.Current()
+			out := make([]ui.TroubleshootSession, 0)
+			for _, inst := range h.shell.Instances() {
+				if inst == nil {
+					continue
+				}
+				ta, ok := inst.Applet().(*termApplet)
+				if !ok || ta.sess == nil {
+					continue
+				}
+				out = append(out, ui.TroubleshootSession{
+					Title:    inst.Title(),
+					Customer: ta.customer,
+					Folder:   ta.folder,
+					Target:   ta.sess.TargetLabel(),
+					Active:   cur != nil && inst == cur,
+				})
+			}
+			return out
+		},
+		GatherScrollback: h.gatherScrollback,
+		ScriptNames: func() []string {
+			f := h.loadScripts()
+			names := make([]string, 0, len(f.Scripts))
+			for _, s := range f.Scripts {
+				names = append(names, s.Name)
+			}
+			return names
+		},
+		RunScript: func(name string) error {
+			h.runNamedScript(name)
+			return nil
+		},
+		CheckCursor: func() (string, error) {
+			cli := cursorapi.New(h.base.CursorAPIKey)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			me, err := cli.Me(ctx)
+			if err != nil {
+				return "", err
+			}
+			who := strings.TrimSpace(me.UserEmail)
+			if who == "" {
+				who = "(email not returned)"
+			}
+			key := strings.TrimSpace(me.APIKeyName)
+			if key == "" {
+				key = "(unnamed key)"
+			}
+			return fmt.Sprintf("Cursor OK — user=%s key=%s", who, key), nil
+		},
+		LaunchCursor: func(prompt, repo, ref, name string) (string, error) {
+			if strings.TrimSpace(repo) != "" {
+				cli := cursorapi.New(h.base.CursorAPIKey)
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				req := cursorapi.CreateAgentRequest{
+					Prompt: cursorapi.CreatePrompt{Text: prompt},
+					Name:   strings.TrimSpace(name),
+					Repos: []cursorapi.RepoSpec{{
+						URL:         strings.TrimSpace(repo),
+						StartingRef: strings.TrimSpace(ref),
+					}},
+				}
+				out, err := cli.CreateAgent(ctx, req)
+				if err != nil {
+					return "", err
+				}
+				msg := fmt.Sprintf("Agent %s (%s) · run %s (%s)",
+					out.Agent.ID, out.Agent.Status, out.Run.ID, out.Run.Status)
+				if out.Agent.URL != "" {
+					msg += "\n" + out.Agent.URL
+				}
+				return msg, nil
+			}
+			return h.askCursorAgent(prompt)
+		},
+	})
+}
+
+func (h *host) syncPSACustomers() {
+	path := psasync.DefaultPath(ui.GetAppHome())
+	_ = psasync.WriteExample(path)
+	var src psasync.Source = psasync.FileSource{Path: path}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	list, err := src.ListCustomers(ctx)
+	if err != nil {
+		if os.IsNotExist(err) {
+			src = psasync.StubSource{}
+			list, err = src.ListCustomers(ctx)
+		}
+		if err != nil {
+			dialog.ShowError(err, h.win)
+			return
+		}
+	}
+	tr := h.tree.Tree()
+	root := product.CustomersRoot
+	res := psasync.SyncFolderNames(root, list, func(name string) (string, error) {
+		path, err := (&tr).CreateCustomer(root, name)
+		if err != nil {
+			if strings.Contains(err.Error(), "already exists") {
+				return "", nil
+			}
+			return "", err
+		}
+		return path, nil
+	})
+	res.Source = src.Name()
+	h.tree.SetTree(tr)
+	h.saveTree(tr)
+	msg := fmt.Sprintf("Source: %s\nFile: %s\nCreated: %d\nAlready present: %d", res.Source, path, len(res.Created), len(res.Existing))
+	if len(res.Errors) > 0 {
+		msg += "\nErrors: " + strings.Join(res.Errors, "; ")
+	}
+	dialog.ShowInformation("Customer list import", msg, h.win)
+}
+
+func (h *host) importFromAuvik() {
+	cli := auvik.New(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if err := cli.Verify(ctx); err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	tenants, err := cli.ListTenants(ctx)
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	ui.ShowAuvikImportDialog(h.win, ui.AuvikImportOptions{
+		Tenants: tenants,
+		OnImport: func(tenantIDs []string, imp auvik.ImportOptions) (auvik.ImportStats, error) {
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel2()
+			devs, err := cli.ListDevices(ctx2, tenantIDs, 300)
+			if err != nil {
+				return auvik.ImportStats{}, err
+			}
+			var tenant *auvik.Tenant
+			for i := range tenants {
+				if tenants[i].ID == tenantIDs[0] {
+					tenant = &tenants[i]
+					break
+				}
+			}
+			if tenant == nil {
+				return auvik.ImportStats{}, fmt.Errorf("unknown tenant id %q", tenantIDs[0])
+			}
+			imp.DefaultUsername = strings.TrimSpace(imp.DefaultUsername)
+			if imp.DefaultUsername == "" {
+				imp.DefaultUsername = h.base.AuvikDefaultUsername
+			}
+			if strings.TrimSpace(imp.DefaultCredential) == "" {
+				imp.DefaultCredential = h.base.AuvikDefaultCredential
+			}
+			tr := h.tree.Tree()
+			syncRes := auvik.SyncTenantTree(&tr, devs, auvik.SyncOptions{
+				ImportOptions:     imp,
+				Tenant:            *tenant,
+				MoveToAuvikFolder: true,
+				UseTunnelDefault:  h.base.AuvikAutoTunnel,
+			})
+			h.tree.SetTree(tr)
+			h.saveTree(tr)
+			st := auvik.ImportStats{
+				Imported: syncRes.Created,
+				Skipped:  syncRes.Skipped,
+				NoIP:     syncRes.NoIP,
+				Errors:   syncRes.Errors,
+			}
+			// Surface merge/update counts in the summary string via Errors note.
+			if syncRes.Merged > 0 || syncRes.Updated > 0 || syncRes.Moved > 0 {
+				st.Errors = append(st.Errors,
+					fmt.Sprintf("merged %d, updated %d, moved %d", syncRes.Merged, syncRes.Updated, syncRes.Moved))
+			}
+			return st, nil
+		},
+	})
+}
+
+func (h *host) syncAuvikNow() {
+	h.runAuvikSyncAll(true)
+}
+
+type auvikSyncAggregate struct {
+	Tenants int
+	Summary string
+	Changed bool
+}
+
+func (h *host) auvikImportDefaults() auvik.ImportOptions {
+	return auvik.ImportOptions{
+		NetworkGearOnly:        true,
+		RequireLoginAuthorized: true,
+		DefaultUsername:        h.base.AuvikDefaultUsername,
+		DefaultCredential:      h.base.AuvikDefaultCredential,
+	}
+}
+
+func (h *host) auvikSyncDefaults(tenant auvik.Tenant) auvik.SyncOptions {
+	return auvik.SyncOptions{
+		ImportOptions:     h.auvikImportDefaults(),
+		Tenant:            tenant,
+		MoveToAuvikFolder: true,
+		UseTunnelDefault:  h.base.AuvikAutoTunnel,
+	}
+}
+
+func (h *host) runAuvikSyncAll(interactive bool) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		agg, err := h.auvikSyncPass(ctx)
+		fyne.Do(func() {
+			if interactive {
+				if err != nil {
+					dialog.ShowError(err, h.win)
+					return
+				}
+				dialog.ShowInformation("Auvik sync", agg.Summary, h.win)
+				return
+			}
+			if err != nil {
+				log.Printf("[auvik] background sync: %v", err)
+				return
+			}
+			if agg.Changed {
+				log.Printf("[auvik] background sync: %s", agg.Summary)
+			}
+		})
+	}()
+}
+
+func (h *host) auvikSyncPass(ctx context.Context) (auvikSyncAggregate, error) {
+	cli := auvik.New(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
+	if err := cli.Verify(ctx); err != nil {
+		return auvikSyncAggregate{}, err
+	}
+	tenants, err := cli.ListTenants(ctx)
+	if err != nil {
+		return auvikSyncAggregate{}, err
+	}
+	tr := h.tree.Tree()
+	agg := auvikSyncAggregate{Tenants: len(tenants)}
+	var parts []string
+	for _, tenant := range tenants {
+		devs, err := cli.ListDevices(ctx, []string{tenant.ID}, 300)
+		if err != nil {
+			parts = append(parts, tenant.Name+": "+err.Error())
+			continue
+		}
+		res := auvik.SyncTenantTree(&tr, devs, h.auvikSyncDefaults(tenant))
+		if res.Changed() {
+			agg.Changed = true
+			parts = append(parts, tenant.Name+": "+res.Summary())
+		}
+		if len(res.Errors) > 0 {
+			parts = append(parts, tenant.Name+" errors: "+strings.Join(res.Errors, "; "))
+		}
+	}
+	if agg.Changed {
+		h.tree.SetTree(tr)
+		h.saveTree(tr)
+	}
+	if len(parts) == 0 {
+		agg.Summary = fmt.Sprintf("no changes across %d client(s)", agg.Tenants)
+	} else {
+		agg.Summary = strings.Join(parts, "\n")
+	}
+	return agg, nil
+}
+
+func (h *host) startAuvikPeriodicSync() {
+	if h.auvikSyncCancel != nil {
+		h.auvikSyncCancel()
+		h.auvikSyncCancel = nil
+	}
+	if !h.base.AuvikSyncEnabled {
+		return
+	}
+	interval := h.base.AuvikSyncIntervalMin
+	if interval < 5 {
+		interval = 60
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h.auvikSyncCancel = cancel
+	go func() {
+		time.Sleep(30 * time.Second)
+		ticker := time.NewTicker(time.Duration(interval) * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.runAuvikSyncAll(false)
+			}
+		}
+	}()
+}
+
+func (h *host) tryAuvikTunnelConnect(ctx context.Context, node sessions.Node, opts sessiondial.Options) (term.Transport, error) {
+	if h.auvikTunnels == nil {
+		h.auvikTunnels = auvik.NewTunnelManager(h.base.AuvikTunnelPath)
+	}
+	remotePort := node.Port
+	if remotePort == 0 {
+		remotePort = sessions.TransportSSH.DefaultPort()
+	}
+	local, err := h.auvikTunnels.Ensure(ctx, node.AuvikDomain, node.Host, remotePort, node.AuvikTunnelPort)
+	if err != nil {
+		return nil, err
+	}
+	tunOpts := opts
+	tunOpts.SkipReachCheck = true
+	tunNode := auvik.DialNodeViaTunnel(node, local)
+	log.Printf("[auvik] tunnel localhost:%d → %s:%d (%s)", local, node.Host, remotePort, node.AuvikDomain)
+	return sessiondial.Connect(ctx, tunNode, tunOpts)
+}
+
+// importMap turns a crawl's map.json into sessions under Customers/<name>/….
 func (h *host) importMap() {
 	dir := h.mapDir
 	if dir == "" && h.lastCrawl.MapPath != "" {
 		dir = filepath.Dir(h.lastCrawl.MapPath)
 	}
+	if dir == "" {
+		if c := h.mapCustomer; c != "" {
+			dir = ui.CustomerMapsDir(ui.GetAppHome(), c)
+		} else {
+			dir = ui.MapsRootDir(ui.GetAppHome())
+		}
+	}
 
 	h.pickFile([]string{".json"}, dir, func(path string, data []byte) {
 		h.mapDir = filepath.Dir(path)
+		if cust := ui.InferCustomerFromMapsPath(path); cust != "" {
+			h.mapCustomer = cust
+		}
 		if f := sessions.Sniff(data); f != sessions.FormatMap {
 			dialog.ShowError(fmt.Errorf("%s is a %s, not a topology map", filepath.Base(path), f), h.win)
 			return
 		}
-		h.askMapImport(mapFolderName(path), data)
+		h.askMapImport(path, mapFolderName(path), data)
 	})
 }
 
-// mapFolderName is the folder an imported map lands in unless the person says
-// otherwise. A crawl writes its map into a directory named after what was
-// crawled and calls the file map.json, so for that layout the DIRECTORY is the
-// name worth offering; anything else uses the filename.
+// mapFolderName is the site/crawl folder name under Customers/<customer>/
+// unless the person overrides it. Prefer the crawl date filename; if the file
+// is map.json, use the parent directory (often the customer — then we still
+// ask for a site name).
 func mapFolderName(path string) string {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if strings.EqualFold(base, "map") {
@@ -1111,22 +2128,40 @@ func mapFolderName(path string) string {
 	return base
 }
 
-// askMapImport collects the folder name and the one decision a map import has.
-//
-// Leaves are the devices a neighbour named and nothing ever dialled. They are
-// the bulk of a real map — hundreds of servers behind an exclude — and nothing
-// is known about them but a name, so they are off unless the leaf IS the target.
-func (h *host) askMapImport(defaultFolder string, data []byte) {
+// askMapImport collects customer + folder and the leaves decision.
+func (h *host) askMapImport(mapPath, defaultFolder string, data []byte) {
+	customers := h.customerNames()
+	inferred := ui.InferCustomerFromMapsPath(mapPath)
+	if inferred == "" {
+		inferred = h.mapCustomer
+	}
+	if inferred != "" {
+		customers = mergeStrings(inferred, customers)
+	}
+
+	custSel := widget.NewSelect(customers, nil)
+	if inferred != "" {
+		custSel.SetSelected(inferred)
+	} else if len(customers) > 0 {
+		custSel.SetSelected(customers[0])
+	}
+
 	name := widget.NewEntry()
-	name.SetText(defaultFolder)
-	name.SetPlaceHolder("Site, role, customer…")
+	// Avoid duplicating the customer name as the only folder under itself.
+	folderDef := defaultFolder
+	if inferred != "" && strings.EqualFold(folderDef, inferred) {
+		folderDef = time.Now().Format("crawl-2006-01-02")
+	}
+	name.SetText(folderDef)
+	name.SetPlaceHolder("Site or crawl name")
 
 	leaves := widget.NewCheck("", nil)
 	leafItem := widget.NewFormItem("Include leaves", leaves)
 	leafItem.HintText = "devices a neighbour reported but the crawl never dialled"
 
 	items := []*widget.FormItem{
-		widget.NewFormItem("Folder", name),
+		widget.NewFormItem("Customer", custSel),
+		widget.NewFormItem("Folder under customer", name),
 		leafItem,
 	}
 	d := dialog.NewForm("Import topology map", "Import", "Cancel", items,
@@ -1139,20 +2174,50 @@ func (h *host) askMapImport(defaultFolder string, data []byte) {
 				dialog.ShowError(err, h.win)
 				return
 			}
+			customer := strings.TrimSpace(custSel.Selected)
+			if customer == "" {
+				dialog.ShowError(fmt.Errorf("pick a customer"), h.win)
+				return
+			}
 			folder := strings.TrimSpace(name.Text)
 			if folder == "" {
 				folder = "Imported"
 			}
+			path := sessions.JoinPath(product.CustomersRoot, customer, folder)
 
-			// The same merge the session-file import uses, so both report
-			// themselves identically and a device already in the tree is
-			// skipped wherever it was filed.
 			tr := h.tree.Tree()
-			sum := tr.ImportFolders([]sessions.Folder{{Name: folder, Sessions: nodes}})
+			if _, err := (&tr).EnsureMSPLayout(); err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			if _, err := (&tr).CreateCustomer(product.CustomersRoot, customer); err != nil {
+				// CreateCustomer fails if it already exists — that is fine.
+				if !strings.Contains(strings.ToLower(err.Error()), "exist") {
+					dialog.ShowError(err, h.win)
+					return
+				}
+			}
+			sum := tr.ImportFolders([]sessions.Folder{{Name: path, Sessions: nodes}})
+			h.mapCustomer = customer
+			_, _ = ui.EnsureCustomerMapsDir(ui.GetAppHome(), customer)
 			h.applyImport(tr, sessions.FormatMap, sum)
 		}, h.win)
 	d.Show()
 	ui.EnterConfirmsForm(h.win, items, d.Submit)
+}
+
+func mergeStrings(first string, rest []string) []string {
+	out := []string{first}
+	seen := map[string]bool{strings.ToLower(first): true}
+	for _, s := range rest {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[strings.ToLower(s)] {
+			continue
+		}
+		seen[strings.ToLower(s)] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // applyImport puts the merged tree back, saves it, and says what happened.
@@ -1165,7 +2230,18 @@ func (h *host) askMapImport(defaultFolder string, data []byte) {
 func (h *host) applyImport(tr sessions.Tree, format sessions.Format, sum sessions.ImportSummary) {
 	h.tree.SetTree(tr)
 	h.saveTree(tr)
-	dialog.ShowInformation("Imported "+format.String(), sum.Describe()+"\n\nOrganised into Customers (your pick) and Unassigned.", h.win)
+	h.buildChrome()
+	msg := sum.Describe()
+	switch format {
+	case sessions.FormatMap:
+		msg += "\n\nSessions were filed under Customers/<customer>/<folder>."
+	default:
+		msg += "\n\nRe-import merges by address: existing sessions stay, only new ones are added."
+		if sum.Skipped > 0 && sum.Added == 0 {
+			msg += "\nTip: choose Replace inventory in the SecureCRT wizard to start fresh."
+		}
+	}
+	dialog.ShowInformation("Imported "+format.String(), msg, h.win)
 }
 
 // exportSessions writes the whole tree to a file of the person's choosing.
@@ -1264,6 +2340,10 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 		defer cancel()
 
 		tp, err := sessiondial.Connect(ctx, node, opts)
+		if err != nil && auvik.ShouldTryTunnel(node, err, h.base.AuvikAutoTunnel) {
+			log.Printf("[auvik] direct dial failed, trying tunnel: %v", err)
+			tp, err = h.tryAuvikTunnelConnect(ctx, node, opts)
+		}
 		fyne.Do(func() {
 			if !settled.CompareAndSwap(false, true) {
 				// The operator cancelled and has moved on. Connect closes
@@ -1375,19 +2455,22 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 		return
 	}
 
-	captureBtn := ui.TipIconButtonLow("Start or stop capturing this session to a transcript", theme.MediaRecordIcon(), nil)
-	saveBtn := ui.TipIconButtonLow("Save scrollback to a file", theme.DocumentSaveIcon(), func() {
-		sess.PromptSaveScrollback()
+	sess.SetSendGate(func() (bool, string) {
+		return h.allowSend()
 	})
-	filesBtn := ui.TipIconButtonLow("Transfer files over SFTP on this SSH session", theme.FolderOpenIcon(), func() {
-		client, ok := sess.SSHClient()
-		if !ok || client == nil {
-			dialog.ShowInformation("File Transfer", "SFTP requires an SSH session (not telnet or serial).", h.win)
-			return
+	sess.SetOnUserSend(func(b []byte) {
+		if h.recorder != nil && h.recorder.Active() {
+			h.recorder.Note(string(b))
 		}
-		ui.ShowSFTPDialog(h.win, "Files — "+n.Label(), client)
 	})
-	scriptBtn := ui.TipIconButtonLow("Run a YAML script into this terminal", theme.DocumentIcon(), h.runScriptDialog)
+	sess.SetOnOutputTee(func(b []byte) {
+		if h.recorder != nil && h.recorder.Active() {
+			h.recorder.NoteOutput(string(b))
+		}
+	})
+
+	captureBtn := ui.TipIconButtonLow("Start or stop capturing this session to a transcript", theme.MediaRecordIcon(), nil)
+	sessionMenuBtn := ui.TipButtonLabeled("Session", theme.DocumentIcon(), func() {})
 	refreshCaptureTip := func() {
 		if sess.IsLogging() {
 			captureBtn.SetToolTip("Stop capture (transcript is recording)")
@@ -1406,12 +2489,23 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 	}
 	refreshCaptureTip()
 
+	folder := ""
+	if f, ok := h.folderFor(n); ok {
+		folder = f
+	}
+	customer := sessions.CustomerOfFolder(folder)
+
 	inst := h.shell.Open(ui.Mount{
-		Kind:   ui.KindTerminal,
-		Title:  n.Label(),
-		Applet: &termApplet{content: content, sess: sess},
-		Focus:  sess,
-		Actions: []fyne.CanvasObject{filesBtn, scriptBtn, captureBtn, saveBtn},
+		Kind:  ui.KindTerminal,
+		Title: n.Label(),
+		Applet: &termApplet{
+			content:  content,
+			sess:     sess,
+			folder:   folder,
+			customer: customer,
+		},
+		Focus:   sess,
+		Actions: []fyne.CanvasObject{sessionMenuBtn, captureBtn},
 		// The terminal resolves its own canvas for focus-on-click and for
 		// its context menu, and the driver's cache cannot tell it that it
 		// has moved. Without this a detached session goes deaf on the
@@ -1426,6 +2520,12 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 			if err := sess.Close(); err != nil {
 				log.Printf("[close] %v", err)
 			}
+			// Skip UI refresh during app quit — fyne.Do into a dying
+			// run loop has been observed to delay / stall Quit.
+			if h.shuttingDown {
+				return
+			}
+			fyne.Do(h.refreshOpsChrome)
 		},
 		// Only a live transport is worth stopping somebody for. A tab
 		// whose session already died is a scrollback buffer, and
@@ -1438,6 +2538,9 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 			return ""
 		},
 	})
+	sessionMenuBtn.OnTapped = func() {
+		h.showSessionMenu(sessionMenuBtn, sess, inst, n.Label())
+	}
 	inst.SetStatus(n.Target())
 
 	// The terminal's right-click menu carries the same two bulk actions, for
@@ -1466,46 +2569,78 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 		log.Printf("[state] %s %s", n.Label(), st)
 		// The handler can fire from the read loop, so hop threads before
 		// touching a widget.
-		fyne.Do(func() { inst.SetStatus(n.Target() + " — " + st.String()) })
+		fyne.Do(func() {
+			inst.SetStatus(n.Target() + " — " + st.String())
+			h.refreshOpsChrome()
+			if st == ui.StateConnected {
+				h.shell.EnsureTerminalFocus()
+			}
+		})
 	})
 	sess.SetErrorHandler(func(err error) { log.Printf("[error] %s: %v", n.Label(), err) })
+
+	// Attach emits StateConnected before the handler above is registered, so
+	// the bottom button dock would stay hidden until disconnect.
+	h.refreshOpsChrome()
+	// Force keyboard onto this terminal once the Connecting overlay is gone.
+	// Without this, settle can finish under the dialog and leave focus on the
+	// session tree — a live prompt that ignores every key.
+	h.shell.EnsureTerminalFocus()
 
 	// Do not Canvas.Focus / GrabFocus here. The Connecting dialog's Hide may
 	// still leave an overlay on this frame; focusing under an overlay lands
 	// keys in the wrong focus manager and the terminal looks dead. Shell
-	// settle() waits for overlays to clear, then focuses + OnPlaced (ResyncSize).
+	// settle() and EnsureTerminalFocus wait for overlays to clear first.
 }
 
 // termApplet is the whole adapter. A terminal has no redraw loop to gate -- it
 // repaints from its read loop -- so Start and Stop are genuinely nothing, and
 // the teardown that matters is the Mount's OnClose.
 type termApplet struct {
-	content fyne.CanvasObject
-	sess    *ui.Session
+	content  fyne.CanvasObject
+	sess     *ui.Session
+	folder   string
+	customer string
 }
 
 func (t *termApplet) Content() fyne.CanvasObject { return t.content }
 func (t *termApplet) Start()                     {}
 func (t *termApplet) Stop()                      {}
 
+func (t *termApplet) FolderPath() string {
+	if t == nil {
+		return ""
+	}
+	return t.folder
+}
+func (t *termApplet) CustomerName() string {
+	if t == nil {
+		return ""
+	}
+	return t.customer
+}
+
 // SendBytes implements the button-bar / send-to-all hook.
 func (t *termApplet) SendBytes(b []byte) {
 	if t == nil || t.sess == nil || len(b) == 0 {
 		return
 	}
-	t.sess.SendRaw(b)
+	if !t.sess.SendUser(b) {
+		log.Printf("[button] send failed (%d bytes) connected=%v", len(b), t.sess.Connected())
+	}
 }
 
 // --- crawl -----------------------------------------------------------------
 
 func (h *host) launchCrawl() {
+	h.launchCrawlPrefill("", nil)
+}
+
+func (h *host) launchCrawlPrefill(customer string, seedHosts []string) {
 	h.lastCrawl.Params.VaultPath = h.runVaultPath()
-	home := ""
-	if h.vaultPath != "" {
-		home = filepath.Dir(h.vaultPath)
-	} else {
-		home = ui.GetAppHome()
-	}
+	// Maps always live under app home (~/.pathfinderssh/maps/…), not beside a
+	// relocated vault, so the Map picker and crawl writer agree.
+	home := ui.GetAppHome()
 	root := product.CustomersRoot
 	if h.tree != nil {
 		tr := h.tree.Tree()
@@ -1514,12 +2649,18 @@ func (h *host) launchCrawl() {
 		}
 		h.tree.SetTree(tr)
 	}
+	if c := strings.TrimSpace(customer); c != "" {
+		h.mapCustomer = c
+		_, _ = ui.EnsureCustomerMapsDir(home, c)
+	}
 	ui.ShowCrawlWizard(h.win, ui.CrawlWizardOptions{
-		Prev:          h.lastCrawl,
-		Sessions:      h.crawlSeedOptions(),
-		Customers:     h.customerNames(),
-		CustomersRoot: root,
-		HomeDir:       home,
+		Prev:             h.lastCrawl,
+		Sessions:         h.crawlSeedOptions(),
+		Customers:        h.customerNames(),
+		CustomersRoot:    root,
+		HomeDir:          home,
+		PrefillCustomer:  customer,
+		PrefillSeedHosts: seedHosts,
 		CreateCustomer: func(name string) (string, error) {
 			if h.tree == nil {
 				return "", fmt.Errorf("no session tree loaded")
@@ -1531,6 +2672,10 @@ func (h *host) launchCrawl() {
 			}
 			h.tree.SetTree(tr)
 			h.saveTree(tr)
+			if _, err := ui.EnsureCustomerMapsDir(home, name); err != nil {
+				log.Printf("[maps] create customer maps dir: %v", err)
+			}
+			h.mapCustomer = name
 			return path, nil
 		},
 	}, func(l ui.CrawlLaunch) {
@@ -1538,7 +2683,62 @@ func (h *host) launchCrawl() {
 			l.Params.VaultPath = h.runVaultPath()
 		}
 		h.lastCrawl = l
+		if c := ui.InferCustomerFromMapsPath(l.MapPath); c != "" {
+			h.mapCustomer = c
+		}
 		h.startCrawl(l)
+	})
+}
+
+// importCustomerCrawlCSV walks new-customer seed import: template → CSV → sessions → optional crawl.
+func (h *host) importCustomerCrawlCSV() {
+	home := ui.GetAppHome()
+	if h.vaultPath != "" {
+		home = filepath.Dir(h.vaultPath)
+	}
+	root := product.CustomersRoot
+	ui.ShowCustomerCrawlImportWizard(h.win, ui.CustomerCrawlImportOptions{
+		ExistingCustomers: h.customerNames(),
+		HomeDir:           home,
+		CreateCustomer: func(name string) (string, error) {
+			if h.tree == nil {
+				return "", fmt.Errorf("no session tree loaded")
+			}
+			tr := h.tree.Tree()
+			if _, err := (&tr).EnsureMSPLayout(); err != nil {
+				return "", err
+			}
+			path, err := tr.CreateCustomer(root, name)
+			if err != nil {
+				if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+					h.tree.SetTree(tr)
+					return sessions.CustomerPath(root, name), nil
+				}
+				return "", err
+			}
+			h.tree.SetTree(tr)
+			h.saveTree(tr)
+			_, _ = ui.EnsureCustomerMapsDir(home, name)
+			return path, nil
+		},
+	}, func(imp ui.CustomerCrawlImport) {
+		if h.tree == nil {
+			dialog.ShowError(fmt.Errorf("no session tree loaded"), h.win)
+			return
+		}
+		tr := h.tree.Tree()
+		var folders []sessions.Folder
+		for rel, nodes := range imp.Folders {
+			path := sessions.JoinPath(root, imp.Customer, rel)
+			folders = append(folders, sessions.Folder{Name: path, Sessions: nodes})
+		}
+		sum := tr.ImportFolders(folders)
+		h.mapCustomer = imp.Customer
+		_, _ = ui.EnsureCustomerMapsDir(home, imp.Customer)
+		h.applyImport(tr, sessions.FormatNative, sum)
+		if imp.StartCrawl {
+			h.launchCrawlPrefill(imp.Customer, imp.SeedHosts)
+		}
 	})
 }
 
@@ -1597,6 +2797,20 @@ func customerOfPath(root, folder string) string {
 }
 
 func (h *host) startCrawl(l ui.CrawlLaunch) {
+	l.MapPath = strings.TrimSpace(ui.ExpandHome(l.MapPath))
+	if l.MapPath == "" {
+		cust := strings.TrimSpace(h.mapCustomer)
+		if cust == "" {
+			cust = "Unassigned"
+		}
+		l.MapPath = filepath.Join(ui.CustomerMapsDir(ui.GetAppHome(), cust), time.Now().Format("crawl-2006-01-02.json"))
+		log.Printf("[crawl] MapPath was empty; defaulting to %s", l.MapPath)
+	}
+	if c := ui.InferCustomerFromMapsPath(l.MapPath); c != "" {
+		h.mapCustomer = c
+	}
+	h.lastCrawl = l
+
 	run := crawlrun.New()
 	view := ui.NewCrawlView(run)
 
@@ -1730,11 +2944,45 @@ func (h *host) startCrawl(l ui.CrawlLaunch) {
 		// summary that looked like a clean run.
 		if l.MapPath != "" {
 			if err := writeMap(devices, l.Params, l.MapPath); err != nil {
-				logf("pathfinder: %v", err)
+				log.Printf("pathfinder: write map: %v", err)
 				h.reportRunError(inst, err)
 			} else {
 				outputs = append(outputs, "map → "+l.MapPath)
+				mapPath := l.MapPath
+				fyne.Do(func() {
+					h.mapDir = filepath.Dir(mapPath)
+					if c := ui.InferCustomerFromMapsPath(mapPath); c != "" {
+						h.mapCustomer = c
+					}
+					dialog.ShowConfirm("Map saved",
+						"Topology map written to:\n"+mapPath+"\n\nOpen it now?",
+						func(ok bool) {
+							if !ok {
+								return
+							}
+							files, err := mapweb.ListMaps(filepath.Dir(mapPath))
+							if err != nil {
+								dialog.ShowError(err, h.win)
+								return
+							}
+							base := filepath.Base(mapPath)
+							for _, f := range files {
+								if strings.EqualFold(f.Name, base) {
+									h.openMap(f)
+									return
+								}
+							}
+							// Fresh write may not be listed if parse rejected empty —
+							// open by path directly.
+							h.openMap(mapweb.MapFile{Path: mapPath, Name: base})
+						}, h.win)
+				})
 			}
+		} else {
+			log.Printf("[crawl] no MapPath — topology not saved")
+			fyne.Do(func() {
+				dialog.ShowInformation("No map file", "This crawl had no map output path, so nothing was written under maps/.", h.win)
+			})
 		}
 		if l.SaveRun != "" {
 			if err := run.Snapshot(l.Params.Seeds, l.Params.Domains).Save(l.SaveRun); err != nil {
@@ -1752,16 +3000,19 @@ func (h *host) startCrawl(l ui.CrawlLaunch) {
 // The marshal error was previously discarded by an `if err == nil` with no
 // else, so a map that could not be encoded wrote nothing and said nothing.
 func writeMap(devices []*topo.Device, p crawlrun.Params, path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("map path is empty")
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return fmt.Errorf("map path is a directory — need a .json filename under it")
+	}
 	m := topo.Generate(devices, crawldial.MapOptions(p))
 	data, err := topo.MarshalMap(m)
 	if err != nil {
 		return fmt.Errorf("render map: %w", err)
 	}
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		// The path names a file the operator chose; making its parent
-		// is part of honouring that, and refusing to because one
-		// directory is missing is the kind of friction that gets a
-		// crawl re-run for nothing.
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
@@ -1781,23 +3032,29 @@ func writeMap(devices []*topo.Device, p crawlrun.Params, path string) error {
 // than results to read.
 // --- map -------------------------------------------------------------------
 
-// launchMap opens the picker. The folder it starts in is the one last used,
-// or the folder the last crawl wrote its map to — after a crawl that is
-// exactly where the person wants to be looking.
+// launchMap opens the per-customer map picker.
 func (h *host) launchMap() {
+	home := ui.GetAppHome()
+	root := ui.MapsRootDir(home)
+	_ = os.MkdirAll(root, 0o755)
+
+	initial := h.mapCustomer
+	if initial == "" && h.lastCrawl.MapPath != "" {
+		initial = ui.InferCustomerFromMapsPath(h.lastCrawl.MapPath)
+	}
 	dir := h.mapDir
 	if dir == "" && h.lastCrawl.MapPath != "" {
 		dir = filepath.Dir(h.lastCrawl.MapPath)
 	}
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			dir = home
-		}
-	}
 
-	ui.ShowMapDialog(h.win, dir, func(l ui.MapLaunch) {
+	ui.ShowCustomerMapDialog(h.win, ui.MapDialogOptions{
+		MapsRoot:        root,
+		Customers:       h.customerNames(),
+		InitialCustomer: initial,
+		InitialDir:      dir,
+	}, func(l ui.MapLaunch) {
 		h.mapDir = l.Dir
+		h.mapCustomer = l.Customer
 		h.openMap(l.File)
 	})
 }
@@ -1868,11 +3125,13 @@ func (h *host) mapConnect(n mapweb.NodeRef) {
 	}
 
 	fyne.Do(func() {
-		h.launchTerminal(node)
-		// The browser has focus when a node is clicked, so without this
-		// the session dialog opens behind it and has to be gone looking
-		// for. No-op under Wayland by Fyne's design, where the
-		// compositor decides.
+		folder := ""
+		title := "Map: " + n.Name
+		if c := strings.TrimSpace(h.mapCustomer); c != "" {
+			folder = sessions.JoinPath(product.CustomersRoot, c)
+			title = c + ": " + n.Name
+		}
+		h.launchTerminalTitled(title, folder, node)
 		h.win.RequestFocus()
 	})
 }
@@ -2244,9 +3503,6 @@ func (h *host) startCapture(l ui.CaptureLaunch) {
 // --- vault and prompts -----------------------------------------------------
 
 // unlockQuiet tries the keyring and the environment and gives up silently.
-//
-// Startup path. It must not prompt: there is no terminal a window user is
-// watching, and vaultcli.Open would block on one forever.
 func (h *host) unlockQuiet() {
 	if h.vaultPath == "" {
 		h.refreshVault()
@@ -2261,6 +3517,29 @@ func (h *host) unlockQuiet() {
 		return
 	}
 	h.adopt(v)
+}
+
+// promptVaultUnlockIfNeeded asks once at startup when an encrypted vault exists
+// but the OS keyring did not unlock it. Choosing Remember stores the password
+// for silent unlock next launch.
+func (h *host) promptVaultUnlockIfNeeded() {
+	if h.vault != nil {
+		return
+	}
+	path := h.vaultPath
+	if _, err := os.Stat(path); err != nil {
+		if def := vaultcli.DefaultPath(); def != "" {
+			if _, err2 := os.Stat(def); err2 == nil {
+				path = def
+				h.vaultPath = def
+			} else {
+				return
+			}
+		} else {
+			return
+		}
+	}
+	h.showUnlockVaultDialog(true)
 }
 
 // version is stamped at build time:
@@ -2297,14 +3576,34 @@ func (h *host) showSettings() {
 		ui.SetSettings(loaded)
 	}
 	ui.ShowSettings(h.win, ui.SettingsFormOptions{
-		Settings: h.base,
-		Paths:    h.hostPaths(),
+		Settings:         h.base,
+		Paths:            h.hostPaths(),
+		OnManageVault:    h.manageVault,
+		OnImportSessions: h.importSessions,
+		OnExportSessions: h.exportSessions,
+		OnImportMap:      h.importMap,
+		OnImportCRT:      h.importSecureCRT,
+		OnImportCrawlCSV: h.importCustomerCrawlCSV,
+		OnSyncCustomers:  h.syncPSACustomers,
+		OnImportAuvik:      h.importFromAuvik,
+		OnSyncAuvik:          h.syncAuvikNow,
+		OnHelpQuickstart: func() { ui.ShowHelp(h.win, helpdoc.TopicQuickstart) },
+		OnHelpContents:   func() { ui.ShowHelp(h.win, "") },
+		OnAbout:          h.showAbout,
 		OnSave: func(s ui.Settings) {
-			if s.AppVariant() != h.base.AppVariant() {
-				ui.ApplyAppTheme(h.app, s.AppVariant())
-			}
+			// Always reinstall the chrome theme so TreeExpandStyle icon remaps
+			// take effect (Icon() reads CurrentSettings).
+			ui.ApplyAppTheme(h.app, s.AppVariant())
+			wasAddon := h.base.TroubleshootAddon
 			h.base = s
 			ui.SetSettings(s)
+			if s.TroubleshootAddon && !wasAddon {
+				h.cursorPaneVisible = true
+			}
+			if !s.TroubleshootAddon {
+				h.cursorPaneVisible = false
+			}
+			h.refreshTroubleshootChrome()
 			// Persist synchronously. Async save looked responsive but lost
 			// theme changes when the app locked up or quit before the write.
 			if err := ui.SaveSettings(h.settingsPath, s); err != nil {
@@ -2315,9 +3614,17 @@ func (h *host) showSettings() {
 			if loaded, err := ui.LoadSettings(h.settingsPath); err == nil {
 				h.base = loaded
 				ui.SetSettings(loaded)
+				ui.ApplyAppTheme(h.app, loaded.AppVariant())
+			}
+			if h.tree != nil {
+				h.tree.RefreshView()
 			}
 			h.refreshOpenTerminalThemes()
 			h.refreshOpenTerminalScrollback()
+			if h.auvikTunnels != nil {
+				h.auvikTunnels.BinPath = h.base.AuvikTunnelPath
+			}
+			h.startAuvikPeriodicSync()
 		},
 	})
 }
@@ -2363,6 +3670,9 @@ func (h *host) hostPaths() []ui.AboutDetail {
 		vaultPath = h.vault.Path()
 	}
 	return []ui.AboutDetail{
+		{Label: "License", Value: "GNU GPL v3.0 — free software; you may redistribute under the same terms"},
+		{Label: "Based on", Value: "PathfinderSSH by Scott Peterman (https://github.com/scottpeterman/pathfinderssh)"},
+		{Label: "MSP source", Value: "https://github.com/AgenticOp-io/pathfinderssh-msp"},
 		{Label: "Vault", Value: vaultPath},
 		{Label: "Sessions", Value: h.sessionsPath},
 		{Label: "Captures", Value: h.lastCapture.Params.StorePath},
@@ -2385,7 +3695,7 @@ func flagWasSet(name string) bool {
 func (h *host) showAbout() {
 	ui.ShowAbout(h.win, ui.AboutInfo{
 		Name:    ui.DefaultAppName,
-		Tagline: "crawl, map and capture, from one session tree",
+		Tagline: "MSP fork of PathfinderSSH (GPL-3.0). Upstream by Scott Peterman.",
 		Version: version,
 		Details: h.hostPaths(),
 	})
@@ -2488,6 +3798,70 @@ func (h *host) uninstallDesktop() {
 			}
 			dialog.ShowInformation("Uninstalled", "AppData install and shortcuts removed. You can close this window.", h.win)
 		}, h.win)
+}
+
+// runMSPAccessSetup gates startup on MSP enrollment and engineer sign-in.
+func (h *host) runMSPAccessSetup(onDone func()) {
+	if onDone == nil {
+		onDone = func() {}
+	}
+	auth := mspauth.NewAuthenticator(ui.GetAppHome())
+	h.mspAuth = auth
+
+	finish := func(enroll mspauth.Enrollment, sess mspauth.UserSession) {
+		h.mspEnrollment = enroll
+		h.mspSession = sess
+		who := strings.TrimSpace(sess.Email)
+		if who == "" {
+			who = sess.Name
+		}
+		if who != "" {
+			log.Printf("[mspauth] session: %s (%s)", who, enroll.Provider)
+		}
+		onDone()
+	}
+
+	if h.mspEnrollOnStart {
+		h.showMSPEnrollWizard(auth, finish)
+		return
+	}
+
+	enroll, found, err := mspauth.LoadEnrollment()
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		onDone()
+		return
+	}
+	if !found {
+		h.showMSPEnrollWizard(auth, finish)
+		return
+	}
+	h.mspEnrollment = enroll
+	sess, ok, err := auth.CurrentSession(enroll)
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		onDone()
+		return
+	}
+	if mspauth.LoginRequired(enroll, sess, ok) {
+		ui.ShowMSPSetupDialog(h.win, ui.MSPSetupOptions{
+			Mode:        ui.MSPSetupLogin,
+			Enrollment:  enroll,
+			Authenticate: auth.SignIn,
+			OnComplete:  finish,
+		})
+		return
+	}
+	finish(enroll, sess)
+}
+
+func (h *host) showMSPEnrollWizard(auth *mspauth.Authenticator, finish func(mspauth.Enrollment, mspauth.UserSession)) {
+	ui.ShowMSPSetupDialog(h.win, ui.MSPSetupOptions{
+		Mode:           ui.MSPSetupEnroll,
+		PresetProvider: h.mspSetupPreset,
+		Enroll:         auth.EnrollAndVerify,
+		OnComplete:     finish,
+	})
 }
 
 // offerFirstRunSetup prompts for SecureCRT import when the session tree is empty.
@@ -2707,11 +4081,12 @@ func (h *host) showVaultDialog() {
 		h.showCreateVaultDialog(h.vaultPath)
 		return
 	}
-	h.showUnlockVaultDialog()
+	h.showUnlockVaultDialog(false)
 }
 
 // showUnlockVaultDialog asks for the master password of a vault that is there.
-func (h *host) showUnlockVaultDialog() {
+// When rememberDefault is true (startup), Remember in keyring is pre-checked.
+func (h *host) showUnlockVaultDialog(rememberDefault bool) {
 	// Prefill with a path that EXISTS. h.vaultPath comes from -vault, and a
 	// flag naming a file that is not there is the most likely reason
 	// someone is opening this dialog in the first place -- making them
@@ -2749,11 +4124,10 @@ func (h *host) showUnlockVaultDialog() {
 
 	pass := widget.NewPasswordEntry()
 
-	// Off by default. Filing a master password in the OS keyring is a
-	// decision, and one that outlives this window -- it is what makes every
-	// later start unlock silently, which is exactly why it should be
-	// deliberate rather than a default nobody noticed.
-	remember := widget.NewCheck("Remember in the OS keyring", nil)
+	remember := widget.NewCheck("Remember in the OS keyring (unlock silently next time)", nil)
+	if rememberDefault {
+		remember.SetChecked(true)
+	}
 
 	items := []*widget.FormItem{
 		widget.NewFormItem("Vault", path),
@@ -2821,11 +4195,6 @@ func (h *host) refreshVault() {
 		h.creds = nil
 		h.lookup = nil
 		h.defaultCred = ""
-		if h.vaultBtn != nil {
-			h.vaultBtn.SetIcon(theme.LoginIcon())
-			h.vaultBtn.SetText("Vault locked")
-			h.vaultBtn.SetToolTip("Vault locked — click to unlock or create")
-		}
 		return
 	}
 
@@ -2849,11 +4218,6 @@ func (h *host) refreshVault() {
 			return sessiondial.Credential{}, err
 		}
 		return dialCredential(c), nil
-	}
-	if h.vaultBtn != nil {
-		h.vaultBtn.SetIcon(theme.ConfirmIcon())
-		h.vaultBtn.SetText(fmt.Sprintf("Vault %s", filepath.Base(v.Path())))
-		h.vaultBtn.SetToolTip("Credential vault unlocked — click to manage")
 	}
 }
 

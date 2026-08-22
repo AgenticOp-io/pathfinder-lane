@@ -1,7 +1,6 @@
-// File transfer (SFTP) dialog over an existing SSH connection.
+// File transfer (SFTP) over an existing SSH connection — dialog or shell tab.
 //
 // Uses the same crypto/ssh client as the open terminal — no second login.
-// SCP is not implemented; SFTP is the modern equivalent Pathfinder ships.
 package ui
 
 import (
@@ -22,8 +21,37 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/sftpclient"
 )
 
-// ShowSFTPDialog opens a remote browser for the given SSH client.
-// Caller keeps the SSH session alive; this only closes the SFTP subsystem.
+// SFTPView is an Applet for docking SFTP in a DocTabs tab.
+type SFTPView struct {
+	content fyne.CanvasObject
+	cli     *sftpclient.Client
+	win     fyne.Window
+}
+
+// NewSFTPView opens the SFTP subsystem and builds the browser UI.
+func NewSFTPView(w fyne.Window, sshClient *ssh.Client) (*SFTPView, error) {
+	if w == nil || sshClient == nil {
+		return nil, fmt.Errorf("SFTP requires a window and SSH client")
+	}
+	cli, err := sftpclient.Open(sshClient)
+	if err != nil {
+		return nil, err
+	}
+	v := &SFTPView{cli: cli, win: w}
+	v.content = buildSFTPBody(w, cli)
+	return v, nil
+}
+
+func (v *SFTPView) Content() fyne.CanvasObject { return v.content }
+func (v *SFTPView) Start()                     {}
+func (v *SFTPView) Stop() {
+	if v != nil && v.cli != nil {
+		_ = v.cli.Close()
+		v.cli = nil
+	}
+}
+
+// ShowSFTPDialog opens a remote browser as a modal. Prefer OpenSFTPTab for MSP.
 func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 	if w == nil || sshClient == nil {
 		return
@@ -33,7 +61,17 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 		dialog.ShowError(fmt.Errorf("SFTP: %w", err), w)
 		return
 	}
+	body := buildSFTPBody(w, cli)
+	if title == "" {
+		title = "File Transfer (SFTP)"
+	}
+	d := dialog.NewCustom(title, "Close", body, w)
+	d.SetOnClosed(func() { _ = cli.Close() })
+	d.Resize(fyne.NewSize(720, 520))
+	d.Show()
+}
 
+func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
 	remoteDir := "."
 	var entries []sftpclient.Entry
 	selected := -1
@@ -113,6 +151,18 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 			parent = "/"
 		}
 		pathEntry.SetText(parent)
+		refresh()
+	}
+
+	homeDir := "/"
+	if wd, err := cli.Getwd(); err == nil && strings.TrimSpace(wd) != "" {
+		homeDir = wd
+	}
+	if rp, err := cli.RealPath("~"); err == nil && strings.TrimSpace(rp) != "" {
+		homeDir = rp
+	}
+	goHome := func() {
+		pathEntry.SetText(homeDir)
 		refresh()
 	}
 
@@ -247,8 +297,15 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 		}, w)
 	}
 
-	toolbar := container.NewHBox(
-		widget.NewButtonWithIcon("Up", theme.NavigateBackIcon(), goUp),
+	cfg := LoadSftpNavSettings()
+	upBtn := widget.NewButtonWithIcon("Up", theme.MoveUpIcon(), goUp)
+	tools := []fyne.CanvasObject{upBtn}
+	if cfg.SftpShowHome {
+		tools = append([]fyne.CanvasObject{
+			widget.NewButtonWithIcon("Home", theme.HomeIcon(), goHome),
+		}, tools...)
+	}
+	tools = append(tools,
 		widget.NewButtonWithIcon("Open", theme.FolderOpenIcon(), openSel),
 		widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), refresh),
 		widget.NewButtonWithIcon("Upload…", theme.UploadIcon(), uploadFile),
@@ -256,6 +313,7 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 		widget.NewButtonWithIcon("New folder…", theme.FolderNewIcon(), mkdir),
 		widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), removeSel),
 	)
+	toolbar := container.NewHBox(tools...)
 
 	body := container.NewBorder(
 		container.NewBorder(nil, nil, widget.NewLabel("Remote"), nil, pathEntry),
@@ -263,17 +321,8 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 		nil, nil,
 		container.NewBorder(toolbar, nil, nil, nil, list),
 	)
-
-	if title == "" {
-		title = "File Transfer (SFTP)"
-	}
-	d := dialog.NewCustom(title, "Close", body, w)
-	d.SetOnClosed(func() {
-		_ = cli.Close()
-	})
-	d.Resize(fyne.NewSize(720, 520))
-	d.Show()
 	refresh()
+	return body
 }
 
 func formatSize(n int64) string {
