@@ -1,25 +1,25 @@
 # MSP integration stack
 
-PathfinderSSH MSP connects external systems through **three roles** that must work together for SSH. Solo installs (local sign-in) hide this entire stack in Settings.
+PathfinderSSH MSP connects external systems through **four augment lanes** around the engineer SSH loop. Solo installs (local sign-in) hide this entire stack in Settings.
 
 ## The cohesive loop
 
 ```
-  PSA customers          Inventory (IPs)         Credentials (vault)
-  ─────────────          ─────────────────         ───────────────────
-  ConnectWise            Auvik                     IT Glue
-  Autotask               Domotz                    Hudu
+  PSA customers          Inventory (IPs)         Credentials (vault)     Incident (work doc)
+  ─────────────          ─────────────────         ───────────────────     ───────────────────
+  ConnectWise            Auvik                     IT Glue                 PagerDuty
+  Autotask               Domotz                    Hudu                    (Opsgenie planned)
   Halo PSA               NinjaOne                  Passportal
   JSON file              Datto RMM
                          Automate
                          N-central
-              │                    │                        │
-              └──────────► Customers/<client>/ ◄────────────┘
-                           ├── <source>/devices…
-                           └── sessions link to vault
-                                    │
-                                    ▼
-                              SSH Launch
+              │                    │                        │                      │
+              └──────────► Customers/<client>/ ◄────────────┘                      │
+                           ├── <source>/devices…                                   │
+                           └── sessions link to vault                               │
+                                    │                                                │
+                                    ▼                                                │
+                              SSH Launch ──► document engineer work ───────────────┘
 ```
 
 | Layer | What it gives Pathfinder | What happens on re-sync |
@@ -27,6 +27,9 @@ PathfinderSSH MSP connects external systems through **three roles** that must wo
 | **Customers** | `Customers/<name>/` folder | New PSA clients appear as folders |
 | **Inventory** | SSH sessions with **host/IP** | IPs update; new devices added; merge by device id / IP / name |
 | **Credentials** | Username/password in **encrypted vault** | Vault entries update; sessions link by host/name |
+| **Incident doc** | Bind active incident; post engineer notes + scrollback summary | Local work context; note posted to PagerDuty on document |
+
+Systems that do **not** strengthen this loop are intentionally excluded (e.g. config-audit snapshots without live management IPs). Pathfinder **augments** PSA/RMM/incident apps — it does not replace ticket workflow or on-call routing.
 
 Systems that do **not** strengthen this loop are intentionally excluded (e.g. config-audit snapshots without live management IPs).
 
@@ -47,7 +50,9 @@ Cloud MSP sign-in is required: `mspauth.IntegrationsEnabled()` → Entra or Goog
 1. **Sync customers** — ConnectWise, Autotask, Halo, or `psa-customers.json`
 2. **Sync inventory** — pick **one** RMM/monitoring source per client (Auvik is common; Domotz/Ninja/Datto/Automate/N-central are alternatives)
 3. **Import credentials** — IT Glue, Hudu, or Passportal into vault; link sessions
-4. **Launch** — dialer reads tree host + vault credential
+4. **Bind incident** (optional) — PagerDuty id/URL when working an on-call item
+5. **Launch** — dialer reads tree host + vault credential
+6. **Document work** — post scrollback summary + local evidence zip reference to PagerDuty when done
 
 Repeat inventory + credential sync on a schedule (Auvik supports periodic sync in Settings).
 
@@ -99,6 +104,7 @@ Tags in vault: `itglue-id:`, `hudu-id:`, `passportal-id:` for re-import.
 | ConnectWise Manage | Customers | PSA sync | [CONNECTWISE-API.md](CONNECTWISE-API.md) |
 | Datto Autotask | Customers | PSA sync | [AUTOTASK-API.md](AUTOTASK-API.md) |
 | Halo PSA | Customers | PSA sync | [HALO-API.md](HALO-API.md) |
+| PagerDuty | Incident doc | bind + note | [PAGERDUTY-API.md](PAGERDUTY-API.md) |
 
 ## Code map
 
@@ -107,6 +113,10 @@ Tags in vault: `itglue-id:`, `hudu-id:`, `passportal-id:` for re-import.
 | `internal/invsync` | Generic inventory → session tree |
 | `internal/docvault` | Generic passwords → vault + link |
 | `internal/mspsync` | Folder names, tags, customer resolve, scoped device IDs |
+| `internal/workcontext` | Active incident binding + engineer summary |
+| `internal/incidentbridge` | Generic incident documentation bridge |
+| `internal/pagerduty` | PagerDuty REST client |
+| `internal/evidence` | Scrollback evidence zip |
 | `internal/psasync` | PSA customer → folder |
 | `internal/auvik` | Auvik-specific sync + tunnel |
 | `internal/itglue` | IT Glue (existing vault path) |

@@ -3,6 +3,7 @@ package evidence
 
 import (
 	"archive/zip"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,17 +22,41 @@ func WriteZip(destZip string, ticket string, files []File) error {
 	if len(files) == 0 {
 		return fmt.Errorf("no scrollbacks to pack")
 	}
-	if err := os.MkdirAll(filepath.Dir(destZip), 0o755); err != nil {
-		return err
-	}
-	f, err := os.Create(destZip)
+	data, err := BuildZipBytes(ticket, files)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	zw := zip.NewWriter(f)
-	defer zw.Close()
+	if err := os.MkdirAll(filepath.Dir(destZip), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(destZip, data, 0o644)
+}
 
+// BuildZipBytes returns a zip archive in memory.
+func BuildZipBytes(ticket string, files []File) ([]byte, error) {
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no files to pack")
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	manifest, err := writeZipFiles(zw, ticket, files)
+	if err != nil {
+		return nil, err
+	}
+	mw, err := zw.Create("manifest.txt")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := mw.Write([]byte(manifest)); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func writeZipFiles(zw *zip.Writer, ticket string, files []File) (string, error) {
 	var manifest strings.Builder
 	fmt.Fprintf(&manifest, "PathfinderSSH MSP evidence pack\n")
 	fmt.Fprintf(&manifest, "Created: %s\n", time.Now().Format(time.RFC3339))
@@ -44,18 +69,13 @@ func WriteZip(destZip string, ticket string, files []File) error {
 		fmt.Fprintf(&manifest, "- %s (%d bytes)\n", name, len(file.Content))
 		w, err := zw.Create(name)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if _, err := w.Write(file.Content); err != nil {
-			return err
+			return "", err
 		}
 	}
-	mw, err := zw.Create("manifest.txt")
-	if err != nil {
-		return err
-	}
-	_, err = mw.Write([]byte(manifest.String()))
-	return err
+	return manifest.String(), nil
 }
 
 func sanitizeName(name string) string {

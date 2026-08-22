@@ -31,6 +31,7 @@ type AppChromeConfig struct {
 	OnBarEdit      func()
 	ShowSendDock   bool
 	Status         *widget.Label
+	WorkContext    *widget.Label
 
 	// Cursor AI side pane (Troubleshoot addon).
 	ShowCursorAI bool
@@ -168,6 +169,7 @@ type OpsDock struct {
 	root      fyne.CanvasObject
 	buttonRow fyne.CanvasObject
 	sendRow   fyne.CanvasObject
+	workCtx   *widget.Label
 }
 
 func (d *OpsDock) Content() fyne.CanvasObject {
@@ -175,6 +177,19 @@ func (d *OpsDock) Content() fyne.CanvasObject {
 		return nil
 	}
 	return d.root
+}
+
+// SetWorkContext updates the incident label in the bottom status strip.
+func (c *AppChrome) SetWorkContext(text string) {
+	if c == nil || c.opsDock == nil || c.opsDock.workCtx == nil {
+		return
+	}
+	c.opsDock.workCtx.SetText(text)
+	if text == "" {
+		c.opsDock.workCtx.Hide()
+	} else {
+		c.opsDock.workCtx.Show()
+	}
 }
 
 func (d *OpsDock) SetConnected(connected bool) {
@@ -207,10 +222,19 @@ func newOpsDock(cfg AppChromeConfig) *OpsDock {
 		status = widget.NewLabel("")
 		status.Importance = widget.LowImportance
 	}
-	statusBar := container.NewBorder(nil, nil, status, nil, chromeSpacer())
+	left := container.NewHBox()
+	workCtx := cfg.WorkContext
+	if workCtx == nil {
+		workCtx = widget.NewLabel("")
+		workCtx.Hide()
+	}
+	workCtx.Importance = widget.MediumImportance
+	left.Add(workCtx)
+	left.Add(status)
+	statusBar := container.NewBorder(nil, nil, left, nil, chromeSpacer())
 
 	root := container.NewVBox(buttonRow, statusBar)
-	d := &OpsDock{root: root, buttonRow: buttonRow, sendRow: nil}
+	d := &OpsDock{root: root, buttonRow: buttonRow, sendRow: nil, workCtx: workCtx}
 	d.SetConnected(cfg.ShowSendDock)
 	return d
 }

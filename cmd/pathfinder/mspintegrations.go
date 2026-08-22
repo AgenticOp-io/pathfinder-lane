@@ -61,6 +61,9 @@ func (h *host) mspIntegrationActions() *ui.MSPIntegrationActions {
 		OnImportDatto:      h.importFromDattoRMM,
 		OnImportAutomate:   h.importFromAutomate,
 		OnImportNcentral:   h.importFromNcentral,
+		OnBindWorkContext:  h.bindWorkContext,
+		OnClearWorkContext: h.clearWorkContext,
+		OnDocumentWork:     h.documentWorkToIncident,
 	}
 }
 

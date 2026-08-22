@@ -215,6 +215,10 @@ type Settings struct {
 
 	NcentralJWT       string `json:"ncentral_jwt,omitempty"`
 	NcentralServerURL string `json:"ncentral_server_url,omitempty"`
+
+	// PagerDuty incident documentation (engineer work notes — augments, does not replace PD).
+	PagerDutyAPIKey  string `json:"pagerduty_api_key,omitempty"`
+	PagerDutyBaseURL string `json:"pagerduty_base_url,omitempty"`
 }
 
 // Defaults returns a usable configuration.

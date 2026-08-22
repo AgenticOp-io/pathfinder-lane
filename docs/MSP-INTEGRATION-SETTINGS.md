@@ -2,7 +2,7 @@
 
 All integration fields live in **Settings → Tools** (MSP cloud sign-in only). Solo enrollment hides this section.
 
-See [MSP-INTEGRATION-COMBINATIONS.md](MSP-INTEGRATION-COMBINATIONS.md) for how settings connect to the three-layer stack.
+See [MSP-INTEGRATION-COMBINATIONS.md](MSP-INTEGRATION-COMBINATIONS.md) for how settings connect to the four augment lanes (customers, inventory, credentials, incident doc).
 
 ---
 
@@ -165,6 +165,21 @@ Action: **Sync devices from Automate…**
 | Server URL | `NCENTRAL_SERVER_URL` |
 
 Action: **Sync devices from N-central…**
+
+---
+
+## PagerDuty (incident documentation)
+
+| Setting | Env var |
+| --- | --- |
+| API key | `PAGERDUTY_API_KEY` |
+| Base URL | `PAGERDUTY_BASE_URL` |
+
+Actions (File menu): **Bind active incident…**, **Clear active incident**, **Document work to PagerDuty…**
+
+Session menu: **Document work to PagerDuty…**
+
+See [PAGERDUTY-API.md](PAGERDUTY-API.md).
 
 ---
 

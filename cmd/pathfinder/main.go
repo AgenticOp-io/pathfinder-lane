@@ -89,6 +89,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/ui"
 	"github.com/scottpeterman/pathfinderssh/internal/vault"
 	"github.com/scottpeterman/pathfinderssh/internal/vaultcli"
+	"github.com/scottpeterman/pathfinderssh/internal/workcontext"
 )
 
 func main() {
@@ -227,6 +228,7 @@ func main() {
 		h.vaultPath = vaultcli.DefaultPath()
 	}
 	h.shell = ui.NewShell(a, w)
+	h.initWorkContext()
 
 	// Seed the dialogs so the first launch is not an empty form.
 	h.lastCrawl.Params = crawlrun.Defaults()
@@ -403,6 +405,11 @@ type host struct {
 	mspSession    mspauth.UserSession
 	mspEnrollOnStart bool
 	mspSetupPreset   mspauth.Provider
+
+	// Engineer work context (augments PagerDuty / on-call systems).
+	workCtx          workcontext.Context
+	workCtxPath      string
+	workContextLabel *widget.Label
 }
 
 // shutdown ends the application: applets first, then the map server, then the
@@ -861,6 +868,7 @@ func (h *host) buildChrome() {
 				h.win)
 		},
 		Status:         h.shell.SummaryLabel(),
+		WorkContext:    h.workContextLabel,
 		ShowCursorAI:   h.base.TroubleshootAddon,
 		CursorAIOpen:   h.cursorPaneVisible,
 		OnCursorAI:     h.toggleCursorPane,
@@ -1001,6 +1009,7 @@ func (h *host) showSessionMenu(anchor fyne.CanvasObject, sess *ui.Session, inst 
 		}),
 		fyne.NewMenuItem("Save scrollback…", func() { sess.PromptSaveScrollback() }),
 		fyne.NewMenuItem("Pack ticket evidence…", func() { h.packSessionEvidence(sess, label) }),
+		fyne.NewMenuItem("Document work to PagerDuty…", func() { h.documentWorkToIncident() }),
 	}
 	widget.ShowPopUpMenuAtRelativePosition(
 		fyne.NewMenu("", items...), h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
@@ -2594,6 +2603,7 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 			sess:     sess,
 			folder:   folder,
 			customer: customer,
+			host:     n.Host,
 		},
 		Focus:   sess,
 		Actions: []fyne.CanvasObject{sessionMenuBtn, captureBtn},
@@ -2692,6 +2702,7 @@ type termApplet struct {
 	sess     *ui.Session
 	folder   string
 	customer string
+	host     string
 }
 
 func (t *termApplet) Content() fyne.CanvasObject { return t.content }
