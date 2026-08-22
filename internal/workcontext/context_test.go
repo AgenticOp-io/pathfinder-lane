@@ -13,6 +13,8 @@ func TestNormalizeIncidentID(t *testing.T) {
 		{"Q0ABCDEF", "Q0ABCDEF"},
 		{"https://subdomain.pagerduty.com/incidents/Q0ABCDEF", "Q0ABCDEF"},
 		{"https://api.pagerduty.com/incidents/Q0XYZ?foo=1", "Q0XYZ"},
+		{"https://api.opsgenie.com/v2/alerts/abc-123", "abc-123"},
+		{"https://app.opsgenie.com/a#/alert/detail?detailId=uuid-here", "uuid-here"},
 	}
 	for _, tc := range tests {
 		got := NormalizeIncidentID(tc.raw)

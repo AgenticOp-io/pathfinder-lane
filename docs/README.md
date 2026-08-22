@@ -27,6 +27,7 @@ Repo: https://github.com/AgenticOp-io/pathfinderssh-msp · License: **GPL-3.0**
 | [**HUDU-API.md**](HUDU-API.md) · [**PASSPORTAL-API.md**](PASSPORTAL-API.md) | Vault alternatives |
 | [**CONNECTWISE-API.md**](CONNECTWISE-API.md) · [**AUTOTASK-API.md**](AUTOTASK-API.md) · [**HALO-API.md**](HALO-API.md) | PSA customers |
 | [**PAGERDUTY-API.md**](PAGERDUTY-API.md) | Incident bind + engineer documentation |
+| [**OPSGENIE-API.md**](OPSGENIE-API.md) | Opsgenie alert notes (same augment lane) |
 | [**CURSOR-AI.md**](CURSOR-AI.md) | Troubleshoot addon, side pane, Cloud Agents API |
 
 ## Access & security

@@ -235,6 +235,12 @@ func newOpsDock(cfg AppChromeConfig) *OpsDock {
 
 	root := container.NewVBox(buttonRow, statusBar)
 	d := &OpsDock{root: root, buttonRow: buttonRow, sendRow: nil, workCtx: workCtx}
+	if cfg.OnSendChat != nil {
+		sendRow := newSendRow(cfg.Customers, cfg.OnSendChat)
+		d.sendRow = sendRow
+		root = container.NewVBox(buttonRow, sendRow, statusBar)
+		d.root = root
+	}
 	d.SetConnected(cfg.ShowSendDock)
 	return d
 }

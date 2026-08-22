@@ -14,6 +14,7 @@ import (
 // Provider names an incident system (pagerduty, opsgenie, …).
 const (
 	ProviderPagerDuty = "pagerduty"
+	ProviderOpsgenie  = "opsgenie"
 )
 
 // Context is the engineer's active work binding for this desktop session.
@@ -98,7 +99,7 @@ func (c *Context) RecordHost(host string) {
 	c.LinkedHosts = append(c.LinkedHosts, host)
 }
 
-// NormalizeIncidentID extracts an id from a PagerDuty URL or raw paste.
+// NormalizeIncidentID extracts an id from a PagerDuty/Opsgenie URL or raw paste.
 func NormalizeIncidentID(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -111,6 +112,19 @@ func NormalizeIncidentID(raw string) string {
 			id = strings.Split(id, "?")[0]
 			return strings.TrimSpace(id)
 		}
+	}
+	if strings.Contains(raw, "/alerts/") {
+		parts := strings.Split(raw, "/alerts/")
+		if len(parts) > 1 {
+			id := strings.Split(parts[1], "/")[0]
+			id = strings.Split(id, "?")[0]
+			return strings.TrimSpace(id)
+		}
+	}
+	if idx := strings.Index(raw, "detailId="); idx >= 0 {
+		id := raw[idx+len("detailId="):]
+		id = strings.Split(id, "&")[0]
+		return strings.TrimSpace(id)
 	}
 	return raw
 }

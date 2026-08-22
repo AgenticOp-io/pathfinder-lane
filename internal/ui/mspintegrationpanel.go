@@ -87,6 +87,9 @@ type MSPIntegrationPanel struct {
 
 	pdKey  *widget.Entry
 	pdBase *widget.Entry
+
+	ogKey  *widget.Entry
+	ogBase *widget.Entry
 }
 
 func newMSPIntegrationPanel() *MSPIntegrationPanel {
@@ -163,6 +166,10 @@ func newMSPIntegrationPanel() *MSPIntegrationPanel {
 	p.pdKey.Password = true
 	p.pdBase = entry("https://api.pagerduty.com")
 
+	p.ogKey = entry("REST API key")
+	p.ogKey.Password = true
+	p.ogBase = entry("https://api.opsgenie.com")
+
 	return p
 }
 
@@ -224,6 +231,9 @@ func (p *MSPIntegrationPanel) load(v SettingsFields) {
 
 	p.pdKey.SetText(v.PagerDutyAPIKey)
 	p.pdBase.SetText(v.PagerDutyBaseURL)
+
+	p.ogKey.SetText(v.OpsgenieAPIKey)
+	p.ogBase.SetText(v.OpsgenieBaseURL)
 }
 
 func (p *MSPIntegrationPanel) fields(base SettingsFields) SettingsFields {
@@ -285,6 +295,9 @@ func (p *MSPIntegrationPanel) fields(base SettingsFields) SettingsFields {
 	base.PagerDutyAPIKey = p.pdKey.Text
 	base.PagerDutyBaseURL = p.pdBase.Text
 
+	base.OpsgenieAPIKey = p.ogKey.Text
+	base.OpsgenieBaseURL = p.ogBase.Text
+
 	return base
 }
 
@@ -345,6 +358,8 @@ func (p *MSPIntegrationPanel) content() fyne.CanvasObject {
 		widget.NewLabel("Post engineer work notes to PagerDuty. PSA/RMM/incident workflow stays in those apps."),
 		widget.NewLabelWithStyle("PagerDuty", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		form(row("API key", p.pdKey), row("Base URL", p.pdBase)),
+		widget.NewLabelWithStyle("Opsgenie", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		form(row("API key", p.ogKey), row("Base URL", p.ogBase)),
 	)
 }
 
@@ -413,7 +428,7 @@ func mspFileTabRows(actions *MSPIntegrationActions) []fyne.CanvasObject {
 		rows = append(rows, widget.NewButton("Clear active incident", actions.OnClearWorkContext))
 	}
 	if actions.OnDocumentWork != nil {
-		rows = append(rows, widget.NewButton("Document work to PagerDuty…", actions.OnDocumentWork))
+		rows = append(rows, widget.NewButton("Document work to incident…", actions.OnDocumentWork))
 	}
 	return rows
 }

@@ -144,6 +144,11 @@ type SettingsFields struct {
 
 	PagerDutyAPIKey  string
 	PagerDutyBaseURL string
+
+	OpsgenieAPIKey  string
+	OpsgenieBaseURL string
+
+	VaultBreakGlass bool
 }
 
 // SettingsFieldsOf renders settings into form values.
@@ -233,6 +238,11 @@ func SettingsFieldsOf(s Settings) SettingsFields {
 
 		PagerDutyAPIKey:  s.PagerDutyAPIKey,
 		PagerDutyBaseURL: s.PagerDutyBaseURL,
+
+		OpsgenieAPIKey:  s.OpsgenieAPIKey,
+		OpsgenieBaseURL: s.OpsgenieBaseURL,
+
+		VaultBreakGlass: s.VaultBreakGlass,
 	}
 }
 
@@ -398,6 +408,11 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 
 	out.PagerDutyAPIKey = strings.TrimSpace(f.PagerDutyAPIKey)
 	out.PagerDutyBaseURL = strings.TrimSpace(f.PagerDutyBaseURL)
+
+	out.OpsgenieAPIKey = strings.TrimSpace(f.OpsgenieAPIKey)
+	out.OpsgenieBaseURL = strings.TrimSpace(f.OpsgenieBaseURL)
+
+	out.VaultBreakGlass = f.VaultBreakGlass
 
 	return out.Normalized(), errs
 }

@@ -85,7 +85,7 @@ func sanitizeName(name string) string {
 	if name == "" {
 		name = "scrollback.txt"
 	}
-	if !strings.HasSuffix(strings.ToLower(name), ".txt") {
+	if !strings.HasSuffix(strings.ToLower(name), ".txt") && !strings.HasSuffix(strings.ToLower(name), ".json") {
 		name += ".txt"
 	}
 	return name

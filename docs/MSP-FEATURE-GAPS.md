@@ -33,6 +33,12 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 | Script recorder | Record sends into YAML scripts |
 | Read-only / change window | Session policy gates |
 | **PagerDuty work context (Phase 1)** | Bind incident, status bar, document scrollback as incident note + local evidence zip |
+| **Ops desk shell (Phase 2)** | Bind incident → filter tree to customer, per-customer macros, vault scope |
+| **Post-change capture pack** | Scrollback + customer map + running-config captures in one zip |
+| **Opsgenie adapter** | Same incident bridge as PagerDuty |
+| **Send-to-customer** | Bottom send row + `scope: customer` on macros/scripts |
+| **Vault customer tags** | `customer:<name>` on doc vault import; break-glass in Settings → Ops |
+| **Crawl low-confidence filter** | Low conf button + merge hints in crawl summary |
 
 ## Open — CRT / power-user parity
 
@@ -53,11 +59,11 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 
 | Feature | Priority | Effort | Status |
 | --- | --- | --- | --- |
-| Customer-scoped ops desk shell | P0 | L | Open — incident → customer → sessions |
-| Per-customer vault scope + break-glass | P0 | L | Open |
-| Change-window send-to-customer | P1 | M | Open — macros scoped to `Customers/<name>/` |
-| Post-change capture pack per incident | P1 | M | Open — config + scrollback + map in one artifact |
-| Crawl confidence UI + merge suggestions | P1 | M | Open |
+| Customer-scoped ops desk shell | P0 | L | **Shipped** — bind incident enters ops desk |
+| Per-customer vault scope + break-glass | P0 | L | **Shipped** — customer tags + Settings break-glass |
+| Change-window send-to-customer | P1 | M | **Shipped** — send row + scope: customer |
+| Post-change capture pack per incident | P1 | M | **Shipped** — capturepack + document dialog |
+| Crawl confidence UI + merge suggestions | P1 | M | **Partial** — low-conf filter + merge hint count |
 | Shared customer map + live overlay (NOC) | P2 | XL | Open — team wallboard is out of scope for v1 |
 | Customer export handoff package | P2 | M | Open |
 | Serial + SSH dual-path on one node | P2 | M | Open |

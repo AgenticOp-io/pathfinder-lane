@@ -323,6 +323,10 @@ func (h *host) importFromHudu() {
 		CustomerNames: h.mspCustomerNames(),
 		OnImport: func(label, customerFolder string, link bool) (string, error) {
 			id := idByLabel[label]
+			cust := h.resolveMSPCustomer(customerFolder)
+			if cust == "" {
+				cust = h.resolveMSPCustomer(label)
+			}
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 180*time.Second)
 			defer cancel2()
 			raw, err := cli.ListPasswords(ctx2, id)
@@ -336,6 +340,7 @@ func (h *host) importFromHudu() {
 				SourceTag:      mspsync.TagHudu,
 				IDTagPrefix:    mspsync.TagHuduID,
 				UpdateExisting: true,
+				CustomerName:   cust,
 			})
 			if err != nil {
 				return "", err
@@ -394,6 +399,7 @@ func (h *host) importFromPassportal() {
 				SourceTag:        mspsync.TagPassportal,
 				IDTagPrefix:      mspsync.TagPassportalID,
 				UpdateExisting:   true,
+				CustomerName:     customer,
 			})
 			if err != nil {
 				return "", err

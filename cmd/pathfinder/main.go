@@ -410,6 +410,8 @@ type host struct {
 	workCtx          workcontext.Context
 	workCtxPath      string
 	workContextLabel *widget.Label
+	opsDeskCustomerName string
+	treeFilterBackup    string
 }
 
 // shutdown ends the application: applets first, then the map server, then the
@@ -832,7 +834,11 @@ func (h *host) buildChrome() {
 	}
 
 	path := buttons.Path(ui.GetAppHome())
-	btnFile, err := buttons.Load(path)
+	customer := h.opsDeskCustomer()
+	btnFile, err := buttons.LoadMerged(ui.GetAppHome(), customer)
+	if err != nil {
+		btnFile, err = buttons.Load(path)
+	}
 	if err != nil {
 		btnFile = buttons.Defaults()
 	}
@@ -1009,7 +1015,7 @@ func (h *host) showSessionMenu(anchor fyne.CanvasObject, sess *ui.Session, inst 
 		}),
 		fyne.NewMenuItem("Save scrollback…", func() { sess.PromptSaveScrollback() }),
 		fyne.NewMenuItem("Pack ticket evidence…", func() { h.packSessionEvidence(sess, label) }),
-		fyne.NewMenuItem("Document work to PagerDuty…", func() { h.documentWorkToIncident() }),
+		fyne.NewMenuItem("Document work to incident…", func() { h.documentWorkToIncident() }),
 	}
 	widget.ShowPopUpMenuAtRelativePosition(
 		fyne.NewMenu("", items...), h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
@@ -1136,6 +1142,19 @@ type scriptSend struct{ h *host }
 
 func (s scriptSend) SendActive(text string) { s.h.shell.SendToActive(text) }
 func (s scriptSend) SendAll(text string)    { s.h.shell.SendToAllTerminals(text) }
+func (s scriptSend) SendCustomer(customer, text string) {
+	cust := strings.TrimSpace(customer)
+	if cust == "" {
+		cust = s.h.opsDeskCustomer()
+	}
+	if cust == "" {
+		s.h.shell.SendToActive(text)
+		return
+	}
+	s.h.shell.SendToMatching(text, func(meta ui.TerminalMeta) bool {
+		return strings.EqualFold(meta.CustomerName(), cust)
+	})
+}
 
 func (s scriptSend) WaitForPattern(ctx context.Context, pattern string, regex bool, timeout time.Duration) error {
 	sess := s.h.activeScriptSession()
@@ -1176,10 +1195,10 @@ func (h *host) openScriptEditor() {
 }
 
 func (h *host) runNamedScript(name string) {
-	h.runNamedScriptScoped(name, false)
+	h.runNamedScriptScoped(name, false, false)
 }
 
-func (h *host) runNamedScriptScoped(name string, allTabs bool) {
+func (h *host) runNamedScriptScoped(name string, allTabs bool, customerScope bool) {
 	f := h.loadScripts()
 	for _, sc := range f.Scripts {
 		if sc.Name != name {
@@ -1187,6 +1206,8 @@ func (h *host) runNamedScriptScoped(name string, allTabs bool) {
 		}
 		if allTabs {
 			sc.Scope = "all"
+		} else if customerScope {
+			sc.Scope = "customer"
 		}
 		if prev := h.scriptCancel.Load(); prev != nil {
 			(*prev)()
@@ -1383,7 +1404,12 @@ func (h *host) sendButton(b buttons.Button) {
 
 func (h *host) barButtonAction(b buttons.Button, all bool) {
 	if strings.TrimSpace(b.Script) != "" {
-		h.runNamedScriptScoped(b.Script, all || strings.EqualFold(b.Scope, "all"))
+		allTabs := all || strings.EqualFold(b.Scope, "all")
+		if strings.EqualFold(b.Scope, "customer") {
+			h.runNamedScriptScoped(b.Script, false, true)
+			return
+		}
+		h.runNamedScriptScoped(b.Script, allTabs, false)
 		return
 	}
 	h.sendButtonScoped(b, all)
@@ -1394,16 +1420,28 @@ func (h *host) sendButtonScoped(b buttons.Button, all bool) {
 	if text == "" {
 		return
 	}
-	// Enter key in the terminal is CR; append that (NormalizeTerminalSend also
-	// maps any YAML \n to \r inside SendToActive / SendToAllTerminals).
 	text += "\r"
 	if ok, reason := h.allowSend(); !ok {
 		dialog.ShowInformation("Send blocked", reason, h.win)
 		return
 	}
-	if all {
+	scope := strings.ToLower(strings.TrimSpace(b.Scope))
+	if all || scope == "all" {
 		h.confirmFanOut("Send button \""+b.Label+"\" to all open terminals?", func() {
 			h.shell.SendToAllTerminals(text)
+		})
+		return
+	}
+	if scope == "customer" {
+		cust := h.opsDeskCustomer()
+		if cust == "" {
+			dialog.ShowInformation("Send", "Bind a customer in ops desk first.", h.win)
+			return
+		}
+		h.confirmFanOut("Send button \""+b.Label+"\" to customer "+cust+"?", func() {
+			h.shell.SendToMatching(text, func(meta ui.TerminalMeta) bool {
+				return strings.EqualFold(meta.CustomerName(), cust)
+			})
 		})
 		return
 	}
@@ -4325,7 +4363,23 @@ func (h *host) refreshVault() {
 	}
 
 	v := h.vault
-	h.creds = v.Names()
+	names := v.Names()
+	if h.vaultCustomerScoped() {
+		tag := sessions.CustomerTag(h.opsDeskCustomer())
+		filtered := make([]string, 0, len(names))
+		for _, name := range names {
+			c, err := v.Get(name)
+			if err != nil {
+				continue
+			}
+			if h.credentialAllowed(c) {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
+		_ = tag
+	}
+	h.creds = names
 	h.defaultCred = v.DefaultName()
 	h.lookup = func(ref string) (sessiondial.Credential, error) {
 		// An EMPTY ref asks what this store uses when a session names
@@ -4337,11 +4391,17 @@ func (h *host) refreshVault() {
 			if !ok {
 				return sessiondial.Credential{}, nil
 			}
+			if !h.credentialAllowed(c) {
+				return sessiondial.Credential{}, fmt.Errorf("default credential outside customer scope (use break-glass in Settings)")
+			}
 			return dialCredential(c), nil
 		}
 		c, err := v.Get(ref)
 		if err != nil {
 			return sessiondial.Credential{}, err
+		}
+		if !h.credentialAllowed(c) {
+			return sessiondial.Credential{}, fmt.Errorf("credential %q outside customer scope", ref)
 		}
 		return dialCredential(c), nil
 	}
