@@ -44,13 +44,13 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 
 | Feature | Priority | Effort | Status |
 | --- | --- | --- | --- |
-| Connect bar (adhoc host without save) | P1 | S | Open |
+| Connect bar (adhoc host without save) | P1 | S | **Shipped** — bottom connect + send row |
 | Dependent / chained jump UI polish | P1 | M | Open |
-| Chat / send-to-all armable input | P1 | S | Open |
+| Chat / send-to-all armable input | P1 | S | **Shipped** — bottom send row restored |
 | Richer script language (Python path) | P1 | L | Open |
 | Named firewall / SOCKS profiles | P2 | M | Open |
-| CRT re-import merge report | P1 | M | Open |
-| Windows OpenSSH agent integration | P1 | M | Open |
+| CRT re-import merge report | P1 | M | **Shipped** — per-folder merge dialog |
+| Windows OpenSSH agent integration | P1 | M | **Shipped** — OpenSSH agent pipe via `sshcore` |
 | Zmodem / classic modem transfers | P3 | L | Open |
 | X11 forwarding | P3 | M | Open |
 | SecureFX-class dual-pane file client | P2 | XL | Open |
@@ -73,7 +73,7 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 | Feature | Priority | Effort | Status |
 | --- | --- | --- | --- |
 | PagerDuty bind + document note | P0 | M | **Shipped** — see [PAGERDUTY-API.md](PAGERDUTY-API.md) |
-| Opsgenie / Jira Service Management adapter | P1 | M | Planned — same `incidentbridge` interface |
+| Opsgenie / Jira Service Management adapter | P1 | M | **Shipped (Opsgenie)** — see [OPSGENIE-API.md](OPSGENIE-API.md) |
 | Auto-bind incident from PSA ticket id | P2 | M | Open |
 | Upload evidence to ticket PSA (not only PD note) | P2 | L | Open — vendor-specific |
 

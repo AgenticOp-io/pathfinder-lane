@@ -155,10 +155,16 @@ type ImportSummary struct {
 
 	Renamed  []string // added under a different name to avoid a clash
 	Rejected []string // nothing to connect to, or the folder refused it
+
+	// Results holds per-folder outcomes for merge reports (re-import / CRT).
+	Results []ImportResult
 }
 
 // merge folds one folder's result into the summary.
 func (s *ImportSummary) merge(r ImportResult) {
+	if r.Added > 0 || len(r.Skipped) > 0 || len(r.Renamed) > 0 || len(r.Rejected) > 0 {
+		s.Results = append(s.Results, r)
+	}
 	if r.Added > 0 {
 		s.Folders = append(s.Folders, r.Folder)
 	}
@@ -200,6 +206,47 @@ func (s ImportSummary) Describe() string {
 		fmt.Fprintf(&b, "\nNo address to connect to, so not imported: %s.", nameList(s.Rejected))
 	}
 	return b.String()
+}
+
+// MergeReport is a detailed re-import / CRT merge breakdown for engineer review.
+func (s ImportSummary) MergeReport() string {
+	var b strings.Builder
+	b.WriteString(s.Describe())
+	if len(s.Results) == 0 {
+		return b.String()
+	}
+	b.WriteString("\n\n--- Per-folder merge ---\n")
+	for _, r := range s.Results {
+		fmt.Fprintf(&b, "\n%s:\n", r.Folder)
+		if r.Added > 0 {
+			fmt.Fprintf(&b, "  + %d new session(s)\n", r.Added)
+		}
+		if len(r.Skipped) > 0 {
+			fmt.Fprintf(&b, "  = %d already in tree", len(r.Skipped))
+			if sample := nameListSample(r.Skipped, 5); sample != "" {
+				fmt.Fprintf(&b, " (%s)", sample)
+			}
+			b.WriteString("\n")
+		}
+		if len(r.Renamed) > 0 {
+			fmt.Fprintf(&b, "  ~ renamed: %s\n", nameListSample(r.Renamed, 8))
+		}
+		if len(r.Rejected) > 0 {
+			fmt.Fprintf(&b, "  ! rejected: %s\n", nameListSample(r.Rejected, 8))
+		}
+	}
+	return b.String()
+}
+
+func nameListSample(names []string, max int) string {
+	if len(names) == 0 {
+		return ""
+	}
+	if len(names) <= max {
+		return nameList(names)
+	}
+	head := names[:max]
+	return nameList(head) + fmt.Sprintf(" … +%d more", len(names)-max)
 }
 
 // ImportFolders merges a whole session file into the tree, preserving nested

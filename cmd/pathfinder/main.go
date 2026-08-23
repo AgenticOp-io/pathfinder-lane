@@ -823,6 +823,21 @@ func (h *host) confirmClose(title string, n int, do func()) {
 	}, h.win)
 }
 
+func (h *host) connectAdhoc(host, user string, port int) {
+	if strings.TrimSpace(host) == "" {
+		return
+	}
+	n := sessions.Node{
+		Name:      host,
+		Host:      host,
+		Port:      port,
+		Username:  user,
+		Transport: sessions.TransportSSH,
+		AuthType:  sessions.AuthAgent,
+	}.Normalize()
+	h.connect("", "", n, nil)
+}
+
 func (h *host) buildChrome() {
 	if h.shell == nil {
 		return
@@ -862,6 +877,7 @@ func (h *host) buildChrome() {
 		OnSendChat: func(text string, mode ui.ChatSendMode, customer string) {
 			h.sendChat(text, mode, customer)
 		},
+		OnAdhocConnect: h.connectAdhoc,
 		BarButtons: btnFile.Buttons,
 		OnBarAction: func(b buttons.Button, all bool) { h.barButtonAction(b, all) },
 		OnBarEdit: func() {
@@ -2378,6 +2394,10 @@ func (h *host) applyImport(tr sessions.Tree, format sessions.Format, sum session
 		if sum.Skipped > 0 && sum.Added == 0 {
 			msg += "\nTip: choose Replace inventory in the SecureCRT wizard to start fresh."
 		}
+	}
+	if format == sessions.FormatNative && (sum.Skipped > 0 || len(sum.Renamed) > 0 || len(sum.Rejected) > 0 || len(sum.Results) > 1) {
+		ui.ShowImportMergeReport(h.win, "Imported "+format.String(), sum)
+		return
 	}
 	dialog.ShowInformation("Imported "+format.String(), msg, h.win)
 }
