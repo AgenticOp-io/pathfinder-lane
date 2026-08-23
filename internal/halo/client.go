@@ -157,6 +157,37 @@ func (c *Client) getJSON(ctx context.Context, path string, dest interface{}) err
 	return json.NewDecoder(resp.Body).Decode(dest)
 }
 
+func (c *Client) postJSON(ctx context.Context, path string, data []byte, dest interface{}) error {
+	_, _, base, err := c.resolve()
+	if err != nil {
+		return err
+	}
+	tok, err := c.token(ctx)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, strings.NewReader(string(data)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("halo API %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	if dest != nil {
+		return json.NewDecoder(resp.Body).Decode(dest)
+	}
+	return nil
+}
+
 func (c *Client) http() *http.Client {
 	if c != nil && c.HTTP != nil {
 		return c.HTTP

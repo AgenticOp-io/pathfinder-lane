@@ -26,6 +26,8 @@ type MSPIntegrationActions struct {
 	OnBindWorkContext  func()
 	OnClearWorkContext func()
 	OnDocumentWork     func()
+	OnExportHandoff    func()
+	OnOpenNOCMap       func()
 }
 
 // MSPIntegrationPanel holds Tools-tab widgets for MSP integrations.
@@ -429,6 +431,12 @@ func mspFileTabRows(actions *MSPIntegrationActions) []fyne.CanvasObject {
 	}
 	if actions.OnDocumentWork != nil {
 		rows = append(rows, widget.NewButton("Document work to incident…", actions.OnDocumentWork))
+	}
+	if actions.OnExportHandoff != nil {
+		rows = append(rows, widget.NewButton("Export customer handoff package…", actions.OnExportHandoff))
+	}
+	if actions.OnOpenNOCMap != nil {
+		rows = append(rows, widget.NewButton("Open NOC map view…", actions.OnOpenNOCMap))
 	}
 	return rows
 }

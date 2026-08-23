@@ -50,6 +50,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/storage"
@@ -78,6 +79,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/product"
 	"github.com/scottpeterman/pathfinderssh/internal/psasync"
 	"github.com/scottpeterman/pathfinderssh/internal/pyrun"
+	"github.com/scottpeterman/pathfinderssh/internal/pyscripts"
 	"github.com/scottpeterman/pathfinderssh/internal/recent"
 	"github.com/scottpeterman/pathfinderssh/internal/scripts"
 	"github.com/scottpeterman/pathfinderssh/internal/serialx"
@@ -1523,6 +1525,41 @@ func (h *host) runPythonScript() {
 		dialog.ShowInformation("Send blocked", reason, h.win)
 		return
 	}
+	catalog, err := pyscripts.List(ui.GetAppHome())
+	if err != nil {
+		dialog.ShowError(err, h.win)
+		return
+	}
+	if len(catalog) > 0 {
+		labels := make([]string, len(catalog))
+		for i, p := range catalog {
+			labels[i] = filepath.Base(p)
+		}
+		sel := widget.NewSelect(labels, nil)
+		sel.SetSelected(labels[0])
+		body := container.NewVBox(
+			widget.NewLabel("Saved scripts: "+pyscripts.Dir(ui.GetAppHome())),
+			sel,
+		)
+		dialog.ShowCustom("Run Python script", "Close", container.NewVBox(
+			body,
+			widget.NewButton("Run selected", func() {
+				name := sel.Selected
+				for _, p := range catalog {
+					if filepath.Base(p) == name {
+						h.runPythonScriptPath(sess, p)
+						return
+					}
+				}
+			}),
+			widget.NewButton("Browse for file…", func() { h.runPythonScriptBrowse(sess) }),
+		), h.win)
+		return
+	}
+	h.runPythonScriptBrowse(sess)
+}
+
+func (h *host) runPythonScriptBrowse(sess *ui.Session) {
 	open := dialog.NewFileOpen(func(uc fyne.URIReadCloser, err error) {
 		if err != nil {
 			dialog.ShowError(err, h.win)
@@ -1533,33 +1570,37 @@ func (h *host) runPythonScript() {
 		}
 		path := uc.URI().Path()
 		_ = uc.Close()
-		ctx, cancel := context.WithCancel(context.Background())
-		prev := h.scriptCancel.Swap(&cancel)
-		if prev != nil && *prev != nil {
-			(*prev)()
-		}
-		go func() {
-			err := pyrun.Run(ctx, "", path, pyrun.Callbacks{
-				Send: func(text string) error {
-					if !sess.SendUser([]byte(text)) {
-						return fmt.Errorf("send blocked by policy")
-					}
-					return nil
-				},
-				WaitFor: func(ctx context.Context, pattern string, timeout time.Duration) error {
-					return sess.WaitForPattern(ctx, pattern, false, timeout)
-				},
-			})
-			fyne.Do(func() {
-				if err != nil && ctx.Err() == nil {
-					dialog.ShowError(err, h.win)
-				}
-			})
-		}()
+		h.runPythonScriptPath(sess, path)
 	}, h.win)
 	open.SetFilter(storage.NewExtensionFileFilter([]string{".py"}))
 	open.Resize(fyne.NewSize(820, 600))
 	open.Show()
+}
+
+func (h *host) runPythonScriptPath(sess *ui.Session, path string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	prev := h.scriptCancel.Swap(&cancel)
+	if prev != nil && *prev != nil {
+		(*prev)()
+	}
+	go func() {
+		err := pyrun.Run(ctx, "", path, pyrun.Callbacks{
+			Send: func(text string) error {
+				if !sess.SendUser([]byte(text)) {
+					return fmt.Errorf("send blocked by policy")
+				}
+				return nil
+			},
+			WaitFor: func(ctx context.Context, pattern string, timeout time.Duration) error {
+				return sess.WaitForPattern(ctx, pattern, false, timeout)
+			},
+		})
+		fyne.Do(func() {
+			if err != nil && ctx.Err() == nil {
+				dialog.ShowError(err, h.win)
+			}
+		})
+	}()
 }
 
 func (h *host) installShortcuts() {
@@ -2462,7 +2503,7 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 	var settled atomic.Bool
 
 	progress := dialog.NewCustom("Connecting", "Cancel",
-		widget.NewLabel("Checking reachability of "+n.Target()+" …"), h.win)
+		widget.NewLabel(connectStatusLabel(n)), h.win)
 	// A dial that cannot be escaped is worse than a slow one: until this
 	// existed, a serial open that parked in the driver left a modal over the
 	// whole window and the only exit was killing the process. Hot-plugging an
@@ -2497,10 +2538,20 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 	go func() {
 		defer cancel()
 
-		tp, err := sessiondial.Connect(ctx, node, opts)
-		if err != nil && auvik.ShouldTryTunnel(node, err, h.base.AuvikAutoTunnel) {
+		dialNode := node
+		tp, err := sessiondial.Connect(ctx, dialNode, opts)
+		if err != nil && auvik.ShouldTryTunnel(dialNode, err, h.base.AuvikAutoTunnel) {
 			log.Printf("[auvik] direct dial failed, trying tunnel: %v", err)
-			tp, err = h.tryAuvikTunnelConnect(ctx, node, opts)
+			tp, err = h.tryAuvikTunnelConnect(ctx, dialNode, opts)
+		}
+		if err != nil && folder != "" && strings.TrimSpace(node.ConsoleFallback) != "" {
+			if fb, ok := h.tree.Tree().SessionInFolder(folder, node.ConsoleFallback); ok {
+				log.Printf("[dial] %v — trying console fallback %s", err, fb.Label())
+				tp, err = sessiondial.Connect(ctx, fb, opts)
+				if err == nil {
+					dialNode = fb
+				}
+			}
 		}
 		fyne.Do(func() {
 			if !settled.CompareAndSwap(false, true) {
@@ -2517,13 +2568,13 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 				// After a failed handshake (auth, host key, unreachable), put
 				// the session form back up once the error is acknowledged so
 				// the operator can fix the password or settings.
-				title := node.Label()
+				title := dialNode.Label()
 				if title == "" {
 					title = "Session"
 				}
 				ed := dialog.NewError(err, h.win)
 				ed.SetOnClosed(func() {
-					h.launchTerminalTitled(title, folder, node)
+					h.launchTerminalTitled(title, folder, dialNode)
 				})
 				ed.Show()
 				return
@@ -2531,9 +2582,9 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 			// Persist after dial so password-link Credential is kept, and so
 			// New session (Add) still works via the tree's apply callback.
 			if persist != nil {
-				persist(node)
+				persist(dialNode)
 			}
-			h.mountTerminal(node, tp)
+			h.mountTerminal(dialNode, tp)
 		})
 	}()
 }

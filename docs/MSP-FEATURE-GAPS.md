@@ -39,15 +39,16 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 | **Send-to-customer** | Bottom send row + `scope: customer` on macros/scripts |
 | **Vault customer tags** | `customer:<name>` on doc vault import; break-glass in Settings → Ops |
 | **Crawl low-confidence filter** | Low conf button + merge hints in crawl summary |
+| **Phase 4 engineer augment** | PSA ticket bind/doc, customer handoff export, console fallback, NOC map view, Python script catalog |
 
 ## Open — CRT / power-user parity
 
 | Feature | Priority | Effort | Status |
 | --- | --- | --- | --- |
 | Connect bar (adhoc host without save) | P1 | S | **Shipped** — bottom connect + send row |
-| Dependent / chained jump UI polish | P1 | M | Open |
+| Dependent / chained jump UI polish | P1 | M | **Partial** — connect dialog shows jump hop + jump_hosts route |
 | Chat / send-to-all armable input | P1 | S | **Shipped** — bottom send row restored |
-| Richer script language (Python path) | P1 | L | Open |
+| Richer script language (Python path) | P1 | L | **Partial** — catalog in `python-scripts/` + run dialog |
 | Named firewall / SOCKS profiles | P2 | M | Open |
 | CRT re-import merge report | P1 | M | **Shipped** — per-folder merge dialog |
 | Windows OpenSSH agent integration | P1 | M | **Shipped** — OpenSSH agent pipe via `sshcore` |
@@ -64,9 +65,9 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 | Change-window send-to-customer | P1 | M | **Shipped** — send row + scope: customer |
 | Post-change capture pack per incident | P1 | M | **Shipped** — capturepack + document dialog |
 | Crawl confidence UI + merge suggestions | P1 | M | **Partial** — low-conf filter + merge hint count |
-| Shared customer map + live overlay (NOC) | P2 | XL | Open — team wallboard is out of scope for v1 |
-| Customer export handoff package | P2 | M | Open |
-| Serial + SSH dual-path on one node | P2 | M | Open |
+| Shared customer map + live overlay (NOC) | P2 | XL | **Partial** — NOC map view opens latest customer map + browser reload |
+| Customer export handoff package | P2 | M | **Shipped** — Settings → File tab export zip |
+| Serial + SSH dual-path on one node | P2 | M | **Shipped** — `console_fallback` + auto-retry on dial |
 
 ## Incident documentation lane
 
@@ -74,8 +75,8 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 | --- | --- | --- | --- |
 | PagerDuty bind + document note | P0 | M | **Shipped** — see [PAGERDUTY-API.md](PAGERDUTY-API.md) |
 | Opsgenie / Jira Service Management adapter | P1 | M | **Shipped (Opsgenie)** — see [OPSGENIE-API.md](OPSGENIE-API.md) |
-| Auto-bind incident from PSA ticket id | P2 | M | Open |
-| Upload evidence to ticket PSA (not only PD note) | P2 | L | Open — vendor-specific |
+| Auto-bind incident from PSA ticket id | P2 | M | **Shipped** — ConnectWise / Autotask / Halo lookup on bind |
+| Upload evidence to ticket PSA (not only PD note) | P2 | L | **Partial** — CW note + document upload; Autotask/Halo notes |
 
 ## Explicitly not building (here)
 
@@ -88,4 +89,5 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 
 - [MSP-FEATURES.md](MSP-FEATURES.md) — UI catalog of what exists today
 - [MSP-INTEGRATION-STACK.md](MSP-INTEGRATION-STACK.md) — cohesive sync + augment lanes
+- [PSA-TICKET-API.md](PSA-TICKET-API.md) — PSA ticket bind + document work
 - [ROADMAP-FRONTEND.md](../ROADMAP-FRONTEND.md) — UI roadmap

@@ -64,6 +64,8 @@ func (h *host) mspIntegrationActions() *ui.MSPIntegrationActions {
 		OnBindWorkContext:  h.bindWorkContext,
 		OnClearWorkContext: h.clearWorkContext,
 		OnDocumentWork:     h.documentWorkToIncident,
+		OnExportHandoff:    h.exportCustomerHandoff,
+		OnOpenNOCMap:       h.openNOCMapView,
 	}
 }
 

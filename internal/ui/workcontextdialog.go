@@ -22,10 +22,16 @@ func ShowBindWorkContextDialog(w fyne.Window, opts WorkContextBindOptions) {
 	if w == nil || opts.OnBind == nil {
 		return
 	}
-	provider := widget.NewSelect([]string{workcontext.ProviderPagerDuty, workcontext.ProviderOpsgenie}, nil)
+	provider := widget.NewSelect([]string{
+		workcontext.ProviderPagerDuty,
+		workcontext.ProviderOpsgenie,
+		workcontext.ProviderConnectWise,
+		workcontext.ProviderAutotask,
+		workcontext.ProviderHalo,
+	}, nil)
 	provider.SetSelected(workcontext.ProviderPagerDuty)
 	incident := widget.NewEntry()
-	incident.SetPlaceHolder("Incident id or URL (PagerDuty / Opsgenie)")
+	incident.SetPlaceHolder("Incident id, URL, or PSA ticket number")
 	picker := NewCustomerFolderPicker(opts.CustomerNames, "")
 	title := widget.NewEntry()
 	title.SetPlaceHolder("Short title (optional)")
