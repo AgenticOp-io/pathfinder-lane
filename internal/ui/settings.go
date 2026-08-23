@@ -215,6 +215,17 @@ type Settings struct {
 
 	NcentralJWT       string `json:"ncentral_jwt,omitempty"`
 	NcentralServerURL string `json:"ncentral_server_url,omitempty"`
+
+	// PagerDuty incident documentation (engineer work notes — augments, does not replace PD).
+	PagerDutyAPIKey  string `json:"pagerduty_api_key,omitempty"`
+	PagerDutyBaseURL string `json:"pagerduty_base_url,omitempty"`
+
+	// Opsgenie alert documentation (same augment lane as PagerDuty).
+	OpsgenieAPIKey  string `json:"opsgenie_api_key,omitempty"`
+	OpsgenieBaseURL string `json:"opsgenie_base_url,omitempty"`
+
+	// VaultBreakGlass allows any vault credential during customer-scoped ops desk.
+	VaultBreakGlass bool `json:"vault_break_glass,omitempty"`
 }
 
 // Defaults returns a usable configuration.

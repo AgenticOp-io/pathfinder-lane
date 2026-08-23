@@ -24,7 +24,7 @@ type Button struct {
 	Send string `yaml:"send,omitempty"`
 	// Script is the name of a script in scripts.yaml to run on click.
 	Script string `yaml:"script,omitempty"`
-	// Scope is "active" (default) or "all" SSH tabs.
+	// Scope is "active" (default), "all" SSH tabs, or "customer" (ops desk).
 	Scope string `yaml:"scope,omitempty"`
 }
 
@@ -51,6 +51,62 @@ func Defaults() File {
 // Path is the default buttons file in app home.
 func Path(appHome string) string {
 	return filepath.Join(appHome, FileName)
+}
+
+// PathForCustomer is per-customer macros under Customers/<name>/buttons.yaml.
+func PathForCustomer(appHome, customer string) string {
+	customer = strings.TrimSpace(customer)
+	if customer == "" {
+		return Path(appHome)
+	}
+	seg := strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ':' {
+			return '_'
+		}
+		return r
+	}, customer)
+	return filepath.Join(appHome, "Customers", seg, FileName)
+}
+
+// LoadMerged returns global buttons plus customer overrides (same label replaces).
+func LoadMerged(appHome, customer string) (File, error) {
+	global, err := Load(Path(appHome))
+	if err != nil {
+		return File{}, err
+	}
+	if strings.TrimSpace(customer) == "" {
+		return global, nil
+	}
+	custom, err := Load(PathForCustomer(appHome, customer))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return global, nil
+		}
+		return File{}, err
+	}
+	return mergeButtons(global, custom), nil
+}
+
+func mergeButtons(global, custom File) File {
+	out := global
+	byLabel := map[string]int{}
+	for i, b := range out.Buttons {
+		byLabel[strings.ToLower(strings.TrimSpace(b.Label))] = i
+	}
+	for _, b := range custom.Buttons {
+		key := strings.ToLower(strings.TrimSpace(b.Label))
+		if key == "" {
+			out.Buttons = append(out.Buttons, b)
+			continue
+		}
+		if i, ok := byLabel[key]; ok {
+			out.Buttons[i] = b
+		} else {
+			byLabel[key] = len(out.Buttons)
+			out.Buttons = append(out.Buttons, b)
+		}
+	}
+	return out
 }
 
 // Load reads path, or returns Defaults when missing.

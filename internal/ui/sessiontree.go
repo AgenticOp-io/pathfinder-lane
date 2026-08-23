@@ -170,6 +170,28 @@ func (t *SessionTree) FocusFilter() {
 	t.opts.Window.Canvas().Focus(t.search)
 }
 
+// FilterText returns the current tree filter string.
+func (t *SessionTree) FilterText() string {
+	if t == nil || t.search == nil {
+		return ""
+	}
+	return t.search.Text
+}
+
+// SetFilterText applies a filter and refreshes the tree view.
+func (t *SessionTree) SetFilterText(text string) {
+	if t == nil || t.search == nil {
+		return
+	}
+	t.search.SetText(text)
+	t.refresh()
+}
+
+// ClearFilter removes the tree filter.
+func (t *SessionTree) ClearFilter() {
+	t.SetFilterText("")
+}
+
 func (t *SessionTree) build() {
 	t.search = widget.NewEntry()
 	t.search.SetPlaceHolder("Filter by folder/session name (Ctrl+L)")

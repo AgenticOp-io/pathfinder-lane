@@ -15,9 +15,10 @@ Repo: https://github.com/AgenticOp-io/pathfinderssh-msp · License: **GPL-3.0**
 
 | Doc | Contents |
 | --- | --- |
-| [**MSP-INTEGRATION-STACK.md**](MSP-INTEGRATION-STACK.md) | **Start here** — customers + inventory + credentials loop |
+| [**MSP-INTEGRATION-STACK.md**](MSP-INTEGRATION-STACK.md) | **Start here** — customers + inventory + credentials + incident doc |
 | [**MSP-INTEGRATION-COMBINATIONS.md**](MSP-INTEGRATION-COMBINATIONS.md) | Every PSA × RMM × vault combination |
 | [**MSP-INTEGRATION-SETTINGS.md**](MSP-INTEGRATION-SETTINGS.md) | Settings → Tools field reference |
+| [**MSP-FEATURE-GAPS.md**](MSP-FEATURE-GAPS.md) | Engineer augment gaps vs CRT / PSA replacement |
 | [**INTEGRATIONS.md**](INTEGRATIONS.md) | Architecture overview |
 | [**AUVIK-API.md**](AUVIK-API.md) | Auvik inventory sync, tunnel, settings |
 | [**ITGLUE-API.md**](ITGLUE-API.md) | IT Glue password import, vault, session linking |
@@ -25,6 +26,8 @@ Repo: https://github.com/AgenticOp-io/pathfinderssh-msp · License: **GPL-3.0**
 | [**AUTOMATE-API.md**](AUTOMATE-API.md) · [**NCENTRAL-API.md**](NCENTRAL-API.md) | RMM inventory |
 | [**HUDU-API.md**](HUDU-API.md) · [**PASSPORTAL-API.md**](PASSPORTAL-API.md) | Vault alternatives |
 | [**CONNECTWISE-API.md**](CONNECTWISE-API.md) · [**AUTOTASK-API.md**](AUTOTASK-API.md) · [**HALO-API.md**](HALO-API.md) | PSA customers |
+| [**PAGERDUTY-API.md**](PAGERDUTY-API.md) | Incident bind + engineer documentation |
+| [**OPSGENIE-API.md**](OPSGENIE-API.md) | Opsgenie alert notes (same augment lane) |
 | [**CURSOR-AI.md**](CURSOR-AI.md) | Troubleshoot addon, side pane, Cloud Agents API |
 
 ## Access & security

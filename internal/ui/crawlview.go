@@ -96,8 +96,9 @@ type CrawlView struct {
 }
 
 type filterState struct {
-	active bool
-	state  crawlrun.State
+	active   bool
+	state    crawlrun.State
+	lowConf  bool
 }
 
 // NewCrawlView builds the view over a run.
@@ -164,6 +165,9 @@ func (v *CrawlView) build() {
 	all := widget.NewButton("All", func() { v.clearFilter() })
 	all.Importance = widget.LowImportance
 	counterBar.Add(all)
+	lowConf := widget.NewButton("Low conf", func() { v.toggleLowConfFilter() })
+	lowConf.Importance = widget.LowImportance
+	counterBar.Add(lowConf)
 	counterBar.Add(v.summary)
 
 	v.table = widget.NewTable(v.tableSize, v.makeCell, v.updateCell)
@@ -275,6 +279,17 @@ func (v *CrawlView) clearFilter() {
 	v.dirty.Store(true)
 }
 
+func (v *CrawlView) toggleLowConfFilter() {
+	v.mu.Lock()
+	if v.filter.lowConf {
+		v.filter.lowConf = false
+	} else {
+		v.filter = filterState{active: true, lowConf: true}
+	}
+	v.mu.Unlock()
+	v.dirty.Store(true)
+}
+
 func (v *CrawlView) sortBy(key string) {
 	v.mu.Lock()
 	if v.sortKey == key {
@@ -326,7 +341,11 @@ func (v *CrawlView) updateCell(id widget.TableCellID, o fyne.CanvasObject) {
 	case 2:
 		l.SetText(row.Platform)
 	case 3:
-		l.SetText(fmt.Sprint(row.Confidence()))
+		conf := row.Confidence()
+		l.SetText(fmt.Sprint(conf))
+		if conf > 0 && conf < 50 {
+			l.TextStyle = fyne.TextStyle{Bold: true}
+		}
 	case 4:
 		l.SetText(row.State.String())
 		// Not dialed is not a failure and must not read like one, or the
@@ -402,6 +421,13 @@ func (v *CrawlView) refresh() {
 	if filter.active {
 		kept := rows[:0]
 		for _, r := range rows {
+			if filter.lowConf {
+				if r.Confidence() >= 50 {
+					continue
+				}
+				kept = append(kept, r)
+				continue
+			}
 			if r.State == filter.state {
 				kept = append(kept, r)
 			}
@@ -409,9 +435,13 @@ func (v *CrawlView) refresh() {
 		rows = kept
 	}
 	counts := v.run.Counts()
+	suggestions := crawlrun.MergeSuggestions(v.run.Rows())
 	summary := fmt.Sprintf("depth %d  ·  %d devices  ·  %.2f tries/device  ·  %s",
 		v.run.Depth(), counts.Total(), counts.AttemptsPerReached(),
 		v.run.Elapsed().Round(time.Second))
+	if len(suggestions) > 0 {
+		summary += fmt.Sprintf("  ·  %d merge hint(s)", len(suggestions))
+	}
 
 	v.mu.Lock()
 	v.rows = rows

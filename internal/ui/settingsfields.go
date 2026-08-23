@@ -141,6 +141,14 @@ type SettingsFields struct {
 
 	NcentralJWT   string
 	NcentralServer string
+
+	PagerDutyAPIKey  string
+	PagerDutyBaseURL string
+
+	OpsgenieAPIKey  string
+	OpsgenieBaseURL string
+
+	VaultBreakGlass bool
 }
 
 // SettingsFieldsOf renders settings into form values.
@@ -227,6 +235,14 @@ func SettingsFieldsOf(s Settings) SettingsFields {
 
 		NcentralJWT:    s.NcentralJWT,
 		NcentralServer: s.NcentralServerURL,
+
+		PagerDutyAPIKey:  s.PagerDutyAPIKey,
+		PagerDutyBaseURL: s.PagerDutyBaseURL,
+
+		OpsgenieAPIKey:  s.OpsgenieAPIKey,
+		OpsgenieBaseURL: s.OpsgenieBaseURL,
+
+		VaultBreakGlass: s.VaultBreakGlass,
 	}
 }
 
@@ -389,6 +405,14 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 
 	out.NcentralJWT = strings.TrimSpace(f.NcentralJWT)
 	out.NcentralServerURL = ExpandHome(f.NcentralServer)
+
+	out.PagerDutyAPIKey = strings.TrimSpace(f.PagerDutyAPIKey)
+	out.PagerDutyBaseURL = strings.TrimSpace(f.PagerDutyBaseURL)
+
+	out.OpsgenieAPIKey = strings.TrimSpace(f.OpsgenieAPIKey)
+	out.OpsgenieBaseURL = strings.TrimSpace(f.OpsgenieBaseURL)
+
+	out.VaultBreakGlass = f.VaultBreakGlass
 
 	return out.Normalized(), errs
 }

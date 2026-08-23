@@ -111,6 +111,7 @@ type SettingsForm struct {
 	readOnly  *widget.Check
 	chgStart  *widget.Entry
 	chgEnd    *widget.Entry
+	vaultBG   *widget.Check
 	cursorKey *widget.Entry
 	tsAddon   *widget.Check
 
@@ -163,6 +164,7 @@ func (f *SettingsForm) SetSettings(s Settings) {
 	f.readOnly.SetChecked(v.ReadOnlyMode)
 	f.chgStart.SetText(v.ChangeWindowStart)
 	f.chgEnd.SetText(v.ChangeWindowEnd)
+	f.vaultBG.SetChecked(v.VaultBreakGlass)
 	f.cursorKey.SetText(v.CursorAPIKey)
 	f.tsAddon.SetChecked(v.TroubleshootAddon)
 
@@ -208,6 +210,7 @@ func (f *SettingsForm) read() SettingsFields {
 		ReadOnlyMode:      f.readOnly.Checked,
 		ChangeWindowStart: f.chgStart.Text,
 		ChangeWindowEnd:   f.chgEnd.Text,
+		VaultBreakGlass:   f.vaultBG.Checked,
 		CursorAPIKey:      f.cursorKey.Text,
 		TroubleshootAddon: f.tsAddon.Checked,
 	}
@@ -260,6 +263,7 @@ func (f *SettingsForm) build() {
 	f.readOnly = widget.NewCheck("Read-only — block typing, buttons, scripts, and chat sends", nil)
 	f.chgStart = entry("HH:MM (empty = no window)")
 	f.chgEnd = entry("HH:MM")
+	f.vaultBG = widget.NewCheck("Vault break-glass (ignore customer scope on ops desk)", nil)
 	f.cursorKey = entry("crsr_… or leave blank to use CURSOR_API_KEY")
 	f.cursorKey.Password = true
 	f.tsAddon = widget.NewCheck("Enable Troubleshoot addon (Ops → Troubleshoot agent)", nil)
@@ -376,6 +380,7 @@ func (f *SettingsForm) opsTab() fyne.CanvasObject {
 			row("Read-only", f.readOnly),
 			row("Window start", f.chgStart),
 			row("Window end", f.chgEnd),
+			row("Vault break-glass", f.vaultBG),
 		),
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Troubleshoot addon", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),

@@ -175,6 +175,11 @@ type Sender interface {
 	SendAll(text string)
 }
 
+// CustomerSender sends to all tabs for one MSP customer (ops desk).
+type CustomerSender interface {
+	SendCustomer(customer string, text string)
+}
+
 // Expecter watches the active session's output for a match.
 // Hosts that cannot expect should still implement it and return a clear error.
 type Expecter interface {
@@ -194,7 +199,9 @@ func Run(ctx context.Context, sc Script, sender Sender) error {
 		return fmt.Errorf("scripts: nil sender")
 	}
 	scopeAll := strings.EqualFold(sc.Scope, "all")
+	scopeCustomer := strings.EqualFold(sc.Scope, "customer")
 	exp, _ := sender.(Expecter)
+	cs, _ := sender.(CustomerSender)
 
 	for i, st := range sc.Steps {
 		stepN := i + 1
@@ -204,6 +211,8 @@ func Run(ctx context.Context, sc Script, sender Sender) error {
 		if text := st.Send; text != "" {
 			if scopeAll {
 				sender.SendAll(text)
+			} else if scopeCustomer && cs != nil {
+				cs.SendCustomer("", text)
 			} else {
 				sender.SendActive(text)
 			}

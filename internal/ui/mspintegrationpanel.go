@@ -22,6 +22,10 @@ type MSPIntegrationActions struct {
 	OnImportDatto      func()
 	OnImportAutomate   func()
 	OnImportNcentral   func()
+
+	OnBindWorkContext  func()
+	OnClearWorkContext func()
+	OnDocumentWork     func()
 }
 
 // MSPIntegrationPanel holds Tools-tab widgets for MSP integrations.
@@ -80,6 +84,12 @@ type MSPIntegrationPanel struct {
 
 	ncentralJWT   *widget.Entry
 	ncentralServer *widget.Entry
+
+	pdKey  *widget.Entry
+	pdBase *widget.Entry
+
+	ogKey  *widget.Entry
+	ogBase *widget.Entry
 }
 
 func newMSPIntegrationPanel() *MSPIntegrationPanel {
@@ -152,6 +162,14 @@ func newMSPIntegrationPanel() *MSPIntegrationPanel {
 	p.ncentralJWT.Password = true
 	p.ncentralServer = entry("https://yourserver.n-able.com")
 
+	p.pdKey = entry("REST API key")
+	p.pdKey.Password = true
+	p.pdBase = entry("https://api.pagerduty.com")
+
+	p.ogKey = entry("REST API key")
+	p.ogKey.Password = true
+	p.ogBase = entry("https://api.opsgenie.com")
+
 	return p
 }
 
@@ -210,6 +228,12 @@ func (p *MSPIntegrationPanel) load(v SettingsFields) {
 
 	p.ncentralJWT.SetText(v.NcentralJWT)
 	p.ncentralServer.SetText(v.NcentralServer)
+
+	p.pdKey.SetText(v.PagerDutyAPIKey)
+	p.pdBase.SetText(v.PagerDutyBaseURL)
+
+	p.ogKey.SetText(v.OpsgenieAPIKey)
+	p.ogBase.SetText(v.OpsgenieBaseURL)
 }
 
 func (p *MSPIntegrationPanel) fields(base SettingsFields) SettingsFields {
@@ -268,6 +292,12 @@ func (p *MSPIntegrationPanel) fields(base SettingsFields) SettingsFields {
 	base.NcentralJWT = p.ncentralJWT.Text
 	base.NcentralServer = p.ncentralServer.Text
 
+	base.PagerDutyAPIKey = p.pdKey.Text
+	base.PagerDutyBaseURL = p.pdBase.Text
+
+	base.OpsgenieAPIKey = p.ogKey.Text
+	base.OpsgenieBaseURL = p.ogBase.Text
+
 	return base
 }
 
@@ -323,6 +353,13 @@ func (p *MSPIntegrationPanel) content() fyne.CanvasObject {
 		form(row("User", p.atUser), row("Secret", p.atSecret), row("Integration code", p.atCode), row("Base URL", p.atBase)),
 		widget.NewLabelWithStyle("Halo PSA", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		form(row("Client ID", p.haloClientID), row("Client secret", p.haloClientSecret), row("Tenant", p.haloTenant), row("Base URL", p.haloBase)),
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle("Incident documentation (augment)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("Post engineer work notes to PagerDuty. PSA/RMM/incident workflow stays in those apps."),
+		widget.NewLabelWithStyle("PagerDuty", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		form(row("API key", p.pdKey), row("Base URL", p.pdBase)),
+		widget.NewLabelWithStyle("Opsgenie", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		form(row("API key", p.ogKey), row("Base URL", p.ogBase)),
 	)
 }
 
@@ -378,6 +415,20 @@ func mspFileTabRows(actions *MSPIntegrationActions) []fyne.CanvasObject {
 	}
 	if actions.OnImportPassportal != nil {
 		rows = append(rows, widget.NewButton("Import credentials from Passportal…", actions.OnImportPassportal))
+	}
+	rows = append(rows,
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle("Engineer work documentation", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("Document on-call/incident work from the engineer console (augments PagerDuty)."),
+	)
+	if actions.OnBindWorkContext != nil {
+		rows = append(rows, widget.NewButton("Bind active incident…", actions.OnBindWorkContext))
+	}
+	if actions.OnClearWorkContext != nil {
+		rows = append(rows, widget.NewButton("Clear active incident", actions.OnClearWorkContext))
+	}
+	if actions.OnDocumentWork != nil {
+		rows = append(rows, widget.NewButton("Document work to incident…", actions.OnDocumentWork))
 	}
 	return rows
 }

@@ -38,9 +38,10 @@ type LinkStats struct {
 
 // VaultSyncOptions configures import into the encrypted vault.
 type VaultSyncOptions struct {
-	SourceTag   string // e.g. "itglue", "hudu"
-	IDTagPrefix string // e.g. "itglue-id:", "hudu-id:"
+	SourceTag      string // e.g. "itglue", "hudu"
+	IDTagPrefix    string // e.g. "itglue-id:", "hudu-id:"
 	UpdateExisting bool
+	CustomerName   string // tags creds with customer:<name> for scoped ops desk
 }
 
 // SyncPasswordsToVault imports passwords into the encrypted vault.
@@ -67,6 +68,7 @@ func SyncPasswordsToVault(v *vault.Vault, passwords []Password, opts VaultSyncOp
 		}
 		tag := opts.IDTagPrefix + p.ID
 		name := CredentialName(p)
+		custTag := sessions.CustomerTag(opts.CustomerName)
 		if cur, ok := byTag[tag]; ok && opts.UpdateExisting {
 			cur.Username = p.Username
 			cur.Password = p.Password
@@ -76,6 +78,9 @@ func SyncPasswordsToVault(v *vault.Vault, passwords []Password, opts VaultSyncOp
 			}
 			if !hasTag(cur.Tags, tag) {
 				cur.Tags = append(cur.Tags, tag, opts.SourceTag)
+			}
+			if custTag != "" && !hasTag(cur.Tags, custTag) {
+				cur.Tags = append(cur.Tags, custTag)
 			}
 			if err := v.Update(cur); err != nil {
 				st.Failed++
@@ -96,6 +101,9 @@ func SyncPasswordsToVault(v *vault.Vault, passwords []Password, opts VaultSyncOp
 			Password:    p.Password,
 			Description: description(p),
 			Tags:        []string{opts.SourceTag, tag},
+		}
+		if custTag != "" {
+			c.Tags = append(c.Tags, custTag)
 		}
 		if _, err := v.Add(c); err != nil {
 			if err == vault.ErrDuplicateName {
