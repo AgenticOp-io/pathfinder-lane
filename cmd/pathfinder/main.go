@@ -60,6 +60,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/scottpeterman/pathfinderssh/internal/appinstall"
+	"github.com/scottpeterman/pathfinderssh/internal/installcmd"
 	"github.com/scottpeterman/pathfinderssh/internal/auvik"
 	"github.com/scottpeterman/pathfinderssh/internal/buttons"
 	"github.com/scottpeterman/pathfinderssh/internal/capture"
@@ -134,41 +135,39 @@ func main() {
 		return
 	}
 
-	if err := maybeSelfInstall(*doInstall, *noInstall); err != nil {
-		log.Printf("install: %v", err)
-		if *doInstall {
+	if *doInstall {
+		_, err := installcmd.Run(installcmd.Options{
+			Setup:  setupMode,
+			Enroll: *doEnroll,
+			Home:   ui.GetAppHome(),
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "install: %v\n", err)
 			os.Exit(1)
+		}
+		if !*doEnroll {
+			return
 		}
 	}
 
-	if setupMode != "" && mspauth.HeadlessSetup(setupMode) {
+	if !*doInstall {
+		if err := maybeSelfInstall(false, *noInstall); err != nil {
+			log.Printf("install: %v", err)
+		}
+	}
+
+	if setupMode != "" && mspauth.HeadlessSetup(setupMode) && !*doInstall {
 		if err := mspauth.SaveSoloSetup(ui.GetAppHome()); err != nil {
 			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 			os.Exit(1)
 		}
-		if *doInstall || !*doEnroll {
-			fmt.Println("Solo mode — no Microsoft/Google sign-in required.")
-			if *doInstall {
-				fmt.Println("Installed to", appinstall.ExePath())
-			}
-			if !*doEnroll {
-				return
-			}
+		fmt.Println("Solo mode — no Microsoft/Google sign-in required.")
+		if !*doEnroll {
+			return
 		}
 	}
 
-	if *doInstall && !*doEnroll && setupMode == "" {
-		fmt.Println("Installed to", appinstall.ExePath())
-		return
-	}
-	if *doInstall && !*doEnroll && setupMode != "" && !mspauth.HeadlessSetup(setupMode) {
-		fmt.Println("Installed to", appinstall.ExePath())
-		fmt.Println("Run Pathfinder to finish", setupMode, "sign-in setup.")
-		return
-	}
-
-	// One UI process only. A second Start() (or double-click while already
-	// open) previously left two windows racing writes to settings.json.
+	// One UI process only.
 	if ok, release := appinstall.TrySingleton(); !ok {
 		fmt.Fprintln(os.Stderr, "PathfinderSSH MSP is already running.")
 		os.Exit(0)

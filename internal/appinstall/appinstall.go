@@ -68,35 +68,45 @@ func Ensure() (destExe string, copied bool, err error) {
 	if err := os.MkdirAll(BinDir(), 0o755); err != nil {
 		return "", false, err
 	}
+	srcDir := filepath.Dir(src)
+	bundleCopied, err := CopyToolBundle(srcDir, BinDir())
+	if err != nil {
+		return "", false, err
+	}
+
 	needCopy := true
 	if stD, err := os.Stat(destExe); err == nil {
-		if stS, err := os.Stat(src); err == nil {
+		mainSrc := filepath.Join(srcDir, exeName("pathfinder"))
+		if stS, err := os.Stat(mainSrc); err == nil {
 			needCopy = stS.Size() != stD.Size() || stS.ModTime().After(stD.ModTime())
+		} else if isPathfinderExe(src) {
+			if stS, err := os.Stat(src); err == nil {
+				needCopy = stS.Size() != stD.Size() || stS.ModTime().After(stD.ModTime())
+			}
+		} else {
+			needCopy = false
 		}
 	}
 	if needCopy {
-		if err := copyFile(src, destExe); err != nil {
-			return "", false, fmt.Errorf("install pathfinder: %w", err)
+		mainSrc := filepath.Join(srcDir, exeName("pathfinder"))
+		if st, err := os.Stat(mainSrc); err == nil && !st.IsDir() {
+			if err := copyFile(mainSrc, destExe); err != nil {
+				return "", false, fmt.Errorf("install pathfinder: %w", err)
+			}
+			copied = true
+		} else if isPathfinderExe(src) {
+			if err := copyFile(src, destExe); err != nil {
+				return "", false, fmt.Errorf("install pathfinder: %w", err)
+			}
+			copied = true
+		} else if _, err := os.Stat(destExe); err != nil {
+			return "", false, fmt.Errorf("pathfinder.exe not found beside %s — build the app bundle first", src)
 		}
+	}
+	if bundleCopied {
 		copied = true
 	}
-	// Sibling tools from the same portable folder.
-	srcDir := filepath.Dir(src)
-	seedName := "pfseed"
-	if runtime.GOOS == "windows" {
-		seedName += ".exe"
-	}
-	srcSeed := filepath.Join(srcDir, seedName)
-	if st, err := os.Stat(srcSeed); err == nil && !st.IsDir() {
-		dstSeed := filepath.Join(BinDir(), seedName)
-		seedNeed := true
-		if stD, err := os.Stat(dstSeed); err == nil {
-			seedNeed = st.Size() != stD.Size() || st.ModTime().After(stD.ModTime())
-		}
-		if seedNeed {
-			_ = copyFile(srcSeed, dstSeed)
-		}
-	}
+	// Legacy: pfseed beside portable folder (handled by CopyToolBundle now).
 	// Always refresh LICENSE/NOTICE beside the installed exe (GPL attribution).
 	if err := InstallLegalDocs(BinDir()); err != nil {
 		return destExe, copied, fmt.Errorf("install legal docs: %w", err)
