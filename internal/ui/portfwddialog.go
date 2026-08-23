@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"fyne.io/fyne/v2"
@@ -100,6 +101,32 @@ func ShowPortForwardDialog(w fyne.Window, title string, sshClient *ssh.Client, h
 	target.SetPlaceHolder("remote-host:80 (local/remote only)")
 	target.SetText("127.0.0.1:80")
 
+	profiles, _ := portfwd.LoadProfiles(GetAppHome())
+	profileNames := []string{"(custom)"}
+	profileByName := map[string]portfwd.Profile{}
+	for _, p := range profiles {
+		profileNames = append(profileNames, p.Name)
+		profileByName[p.Name] = p
+	}
+	profileSel := widget.NewSelect(profileNames, nil)
+	profileSel.SetSelected("(custom)")
+	profileSel.OnChanged = func(name string) {
+		p, ok := profileByName[name]
+		if !ok {
+			return
+		}
+		switch p.Kind {
+		case "remote":
+			kind.SetSelected("Remote")
+		case "dynamic":
+			kind.SetSelected("Dynamic (SOCKS5)")
+		default:
+			kind.SetSelected("Local")
+		}
+		listen.SetText(p.ListenAddr)
+		target.SetText(p.TargetAddr)
+	}
+
 	status := widget.NewLabel("")
 	list := widget.NewList(
 		func() int { return len(hub.List()) },
@@ -132,6 +159,35 @@ func ShowPortForwardDialog(w fyne.Window, title string, sshClient *ssh.Client, h
 		hub.Add(handle)
 		refresh()
 	})
+	saveProfile := widget.NewButton("Save as profile…", func() {
+		nameEntry := widget.NewEntry()
+		nameEntry.SetPlaceHolder("Profile name")
+		dialog.ShowCustomConfirm("Save forward profile", "Save", "Cancel", nameEntry, func(ok bool) {
+			if !ok || strings.TrimSpace(nameEntry.Text) == "" {
+				return
+			}
+			kindStr := "local"
+			switch kind.Selected {
+			case "Remote":
+				kindStr = "remote"
+			case "Dynamic (SOCKS5)":
+				kindStr = "dynamic"
+			}
+			p := portfwd.Profile{
+				Name:       strings.TrimSpace(nameEntry.Text),
+				Kind:       kindStr,
+				ListenAddr: listen.Text,
+				TargetAddr: target.Text,
+			}
+			all, _ := portfwd.LoadProfiles(GetAppHome())
+			all = portfwd.UpsertProfile(all, p)
+			if err := portfwd.SaveProfiles(GetAppHome(), all); err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			status.SetText("Saved profile " + p.Name)
+		}, w)
+	})
 	stopSel := -1
 	list.OnSelected = func(i widget.ListItemID) { stopSel = int(i) }
 	stopBtn := widget.NewButtonWithIcon("Stop selected", theme.MediaStopIcon(), func() {
@@ -154,12 +210,13 @@ func ShowPortForwardDialog(w fyne.Window, title string, sshClient *ssh.Client, h
 	})
 
 	form := widget.NewForm(
+		widget.NewFormItem("Profile", profileSel),
 		widget.NewFormItem("Type", kind),
 		widget.NewFormItem("Listen", listen),
 		widget.NewFormItem("Target", target),
 	)
 	body := container.NewBorder(
-		container.NewVBox(form, container.NewHBox(start, stopBtn), status),
+		container.NewVBox(form, container.NewHBox(start, saveProfile, stopBtn), status),
 		nil, nil, nil, list,
 	)
 	refresh()

@@ -36,6 +36,8 @@ func main() {
 		err = cmdImportSecureCRT(args)
 	case "import-csv":
 		err = cmdImportCSV(args)
+	case "sync-auvik":
+		err = cmdSyncAuvik(args)
 	case "-h", "-help", "--help", "help":
 		fmt.Fprint(os.Stdout, usage)
 		return
@@ -57,12 +59,14 @@ const usage = `pfseed — create PathfinderSSH session seeds
   pfseed apply -host HOST [-host HOST] [-folder NAME] [-user USER] [-sessions PATH]
   pfseed import-securecrt [-config DIR] [-sessions PATH] [-dry-run] [-preview]
   pfseed import-csv -file FILE [-sessions PATH] [-dry-run]
+  pfseed sync-auvik [-sessions PATH] [-settings PATH] [-prune] [-dry-run]
 
 discover prints JSON of hosts from ~/.ssh/config and (on Windows) PuTTY.
 apply merges those hosts into sessions.yaml without overwriting other folders.
 import-securecrt reads VanDyke Sessions\**\*.ini (no passwords). Nested CRT
 folders become nested Pathfinder folders (Customers → site → vendor).
 import-csv accepts VanDyke-style headers: session_name,hostname,protocol,folder,port,username,description.
+sync-auvik merges all Auvik tenants into sessions.yaml (headless automation).
 `
 
 func appHome() string {

@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -22,10 +23,13 @@ import (
 // Client is an established SSH connection, plus the bastion client when the
 // target was reached through a jump host.
 type Client struct {
-	ssh  *ssh.Client
-	jump *ssh.Client // nil for direct connections
-	addr string
+	ssh      *ssh.Client
+	bastions []*ssh.Client // ordered hop chain; empty for direct
+	addr     string
 }
+
+// BastionCount reports how many bastion hops preceded the target.
+func (c *Client) BastionCount() int { return len(c.bastions) }
 
 // SSH exposes the underlying x/crypto client for higher layers (netexec).
 func (c *Client) SSH() *ssh.Client { return c.ssh }
@@ -58,8 +62,11 @@ func (c *Client) Close() error {
 	if c.ssh != nil {
 		first = c.ssh.Close()
 	}
-	if c.jump != nil {
-		if err := c.jump.Close(); err != nil && first == nil {
+	for i := len(c.bastions) - 1; i >= 0; i-- {
+		if c.bastions[i] == nil {
+			continue
+		}
+		if err := c.bastions[i].Close(); err != nil && first == nil {
 			first = err
 		}
 	}
@@ -91,18 +98,33 @@ func Dial(cfg Config) (*Client, error) {
 
 	var (
 		conn       net.Conn
-		jumpClient *ssh.Client
+		bastions   []*ssh.Client
 	)
 
-	if c.Jump != nil && c.Jump.Host != "" {
-		jumpClient, err = dialJump(&c, hostKeyCB)
+	chain := jumpChain(c)
+	for _, j := range chain {
+		if j == nil || strings.TrimSpace(j.Host) == "" {
+			continue
+		}
+		var jc *ssh.Client
+		if len(bastions) == 0 {
+			jc, err = dialJumpWith(j, c, hostKeyCB)
+		} else {
+			jc, err = dialThroughBastion(bastions[len(bastions)-1], j, c, hostKeyCB)
+		}
 		if err != nil {
+			closeBastions(bastions)
 			return nil, err
 		}
-		conn, err = jumpClient.Dial("tcp", addr)
+		bastions = append(bastions, jc)
+	}
+
+	if len(bastions) > 0 {
+		last := bastions[len(bastions)-1]
+		conn, err = last.Dial("tcp", addr)
 		if err != nil {
-			jumpClient.Close()
-			return nil, fmt.Errorf("reach %s through jump host: %w", addr, err)
+			closeBastions(bastions)
+			return nil, fmt.Errorf("reach %s through jump chain: %w", addr, err)
 		}
 	} else {
 		conn, err = net.DialTimeout("tcp", addr, c.Timeout)
@@ -122,9 +144,7 @@ func Dial(cfg Config) (*Client, error) {
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientConfig)
 	if err != nil {
 		conn.Close()
-		if jumpClient != nil {
-			jumpClient.Close()
-		}
+		closeBastions(bastions)
 		// EOF here is the classic "TCP connected, then the peer vanished"
 		// case — offline gear, wrong port, or a non-SSH listener.
 		if err == io.EOF || errors.Is(err, io.EOF) {
@@ -135,10 +155,18 @@ func Dial(cfg Config) (*Client, error) {
 	conn.SetDeadline(time.Time{})
 
 	return &Client{
-		ssh:  ssh.NewClient(sshConn, chans, reqs),
-		jump: jumpClient,
-		addr: addr,
+		ssh:      ssh.NewClient(sshConn, chans, reqs),
+		bastions: bastions,
+		addr:     addr,
 	}, nil
+}
+
+func closeBastions(bastions []*ssh.Client) {
+	for i := len(bastions) - 1; i >= 0; i-- {
+		if bastions[i] != nil {
+			_ = bastions[i].Close()
+		}
+	}
 }
 
 // dialJump establishes the bastion connection. Same algorithm policy, same

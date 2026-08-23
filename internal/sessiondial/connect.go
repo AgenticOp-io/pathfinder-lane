@@ -273,39 +273,29 @@ func connectSSH(ctx context.Context, n sessions.Node, o Options) (term.Transport
 
 	applyCredential(&cfg, n, cred)
 
-	// Checked here rather than in Validate because here is where the answer
-	// is known: the node, the credential it named and the store default have
-	// all had their turn. Without this the gap arrives as an authentication
-	// failure, which sends somebody looking at the device.
 	if strings.TrimSpace(cfg.Username) == "" {
 		return nil, fmt.Errorf("no username: the session names none, and no credential supplied one")
 	}
 
-	if n.Jump.InUse() {
-		// Resolved HERE and not above, because a node carrying a stale
-		// Jump.Credential -- a bastion it no longer goes through, naming
-		// a vault entry since deleted -- used to be refused a DIRECT
-		// connection for a reason with nothing to do with the connection
-		// being made.
-		jumpCred, err := resolve(o.Credentials, n.Jump.Credential)
-		if err != nil {
-			return nil, fmt.Errorf("jump host: %w", err)
+	jumpChain, err := sessionJumpToConfig(n, o.Credentials)
+	if err != nil {
+		return nil, err
+	}
+	if len(jumpChain) == 0 {
+		jumpChain, _ = ResolveJumpChain(n, o.Credentials, o.logf)
+	}
+	if len(jumpChain) > 0 {
+		for _, j := range jumpChain {
+			if j != nil {
+				j.Host = o.resolve(j.Host)
+			}
 		}
-		jump := &sshcore.JumpConfig{
-			Host:     o.resolve(n.Jump.Host),
-			Port:     n.Jump.Port,
-			Username: firstNonEmpty(jumpCred.Username, n.Jump.Username),
-		}
-		// The bastion gets the same strict treatment as the target: one
-		// auth type, never a password offered alongside a key.
-		if key := firstNonEmpty(jumpCred.KeyPath, n.Jump.KeyPath); key != "" && jumpCred.AuthType != sessions.AuthPassword {
-			jump.PrivateKeyPath = key
-			jump.KeyPassphrase = firstNonEmpty(jumpCred.KeyPassphrase, n.Jump.KeyPassphrase)
+		cfg.JumpChain = jumpChain
+		if len(jumpChain) == 1 {
+			o.logf("[ssh] via %s@%s:%d", jumpChain[0].Username, jumpChain[0].Host, jumpChain[0].Port)
 		} else {
-			jump.Password = firstNonEmpty(jumpCred.Password, n.Jump.Password)
+			o.logf("[ssh] via jump chain (%d hops)", len(jumpChain))
 		}
-		cfg.Jump = jump
-		o.logf("[ssh] via %s@%s:%d", jump.Username, jump.Host, jump.Port)
 	}
 
 	if err := ctx.Err(); err != nil {

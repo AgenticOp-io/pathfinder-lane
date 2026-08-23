@@ -93,6 +93,7 @@ type SettingsFields struct {
 	AuvikSyncInterval string
 	AuvikTunnelPath   string
 	AuvikAutoTunnel   bool
+	AuvikPruneStale   bool
 	AuvikDefUsername  string
 	AuvikDefCred      string
 	ITGlueAPIKey      string
@@ -187,6 +188,7 @@ func SettingsFieldsOf(s Settings) SettingsFields {
 		AuvikSyncInterval: strconv.Itoa(s.AuvikSyncIntervalMin),
 		AuvikTunnelPath:   s.AuvikTunnelPath,
 		AuvikAutoTunnel:   s.AuvikAutoTunnel,
+		AuvikPruneStale:   s.AuvikPruneStale,
 		AuvikDefUsername:  s.AuvikDefaultUsername,
 		AuvikDefCred:      s.AuvikDefaultCredential,
 		ITGlueAPIKey:      s.ITGlueAPIKey,
@@ -357,6 +359,7 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 	}
 	out.AuvikTunnelPath = ExpandHome(f.AuvikTunnelPath)
 	out.AuvikAutoTunnel = f.AuvikAutoTunnel
+	out.AuvikPruneStale = f.AuvikPruneStale
 	out.AuvikDefaultUsername = strings.TrimSpace(f.AuvikDefUsername)
 	out.AuvikDefaultCredential = strings.TrimSpace(f.AuvikDefCred)
 	out.ITGlueAPIKey = strings.TrimSpace(f.ITGlueAPIKey)

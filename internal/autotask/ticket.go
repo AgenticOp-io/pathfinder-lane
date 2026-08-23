@@ -2,6 +2,7 @@ package autotask
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -66,10 +67,28 @@ func (b TicketBridge) PostDocument(ctx context.Context, req psaticket.DocumentRe
 		return err
 	}
 	if len(req.FileBytes) > 0 && req.FileName != "" {
-		// Attachment entity varies by Autotask tenant; note references local path in summary.
-		return nil
+		if err := b.uploadAttachment(ctx, id, req.FileName, req.FileBytes); err != nil {
+			return fmt.Errorf("note posted; attachment failed: %w", err)
+		}
 	}
 	return nil
+}
+
+func (b TicketBridge) uploadAttachment(ctx context.Context, ticketID, filename string, data []byte) error {
+	name := strings.TrimSpace(filename)
+	if name == "" {
+		name = "evidence.zip"
+	}
+	body := map[string]interface{}{
+		"attachmentType": "FILE_ATTACHMENT",
+		"fullPath":       name,
+		"title":          "Pathfinder engineer evidence",
+		"publish":        1,
+		"data":           base64.StdEncoding.EncodeToString(data),
+	}
+	payload, _ := json.Marshal(body)
+	path := fmt.Sprintf("/Tickets/%s/Attachments", ticketID)
+	return b.Client.postJSON(ctx, path, string(payload), &struct{}{})
 }
 
 func isDigits(s string) bool {

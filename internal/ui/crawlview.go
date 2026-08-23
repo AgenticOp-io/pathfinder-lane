@@ -37,6 +37,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -168,6 +169,17 @@ func (v *CrawlView) build() {
 	lowConf := widget.NewButton("Low conf", func() { v.toggleLowConfFilter() })
 	lowConf.Importance = widget.LowImportance
 	counterBar.Add(lowConf)
+	mergeHints := widget.NewButton("Merge hints…", func() {
+		suggestions := crawlrun.MergeSuggestions(v.run.Rows())
+		parent := fyne.CurrentApp().Driver().AllWindows()[0]
+		if len(suggestions) == 0 {
+			dialog.ShowInformation("Merge hints", "No duplicate or low-confidence hints for this crawl.", parent)
+			return
+		}
+		ShowCrawlMergeHintsDialog(parent, suggestions)
+	})
+	mergeHints.Importance = widget.LowImportance
+	counterBar.Add(mergeHints)
 	counterBar.Add(v.summary)
 
 	v.table = widget.NewTable(v.tableSize, v.makeCell, v.updateCell)

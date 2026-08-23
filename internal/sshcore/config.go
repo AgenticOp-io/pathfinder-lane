@@ -67,6 +67,9 @@ type Config struct {
 
 	Jump *JumpConfig // nil => direct connection
 
+	// JumpChain is an ordered bastion chain (nearest first). When set, Jump is ignored.
+	JumpChain []*JumpConfig
+
 	HostKeys       HostKeyPolicy
 	KnownHostsPath string // "" => ~/.ssh/known_hosts
 	HostKeyPrompt  HostKeyPromptFunc

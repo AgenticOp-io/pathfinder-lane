@@ -40,16 +40,17 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 | **Vault customer tags** | `customer:<name>` on doc vault import; break-glass in Settings → Ops |
 | **Crawl low-confidence filter** | Low conf button + merge hints in crawl summary |
 | **Phase 4 engineer augment** | PSA ticket bind/doc, customer handoff export, console fallback, NOC map view, Python script catalog |
+| **Auvik automation** | Tenant map, immediate periodic sync, pfseed sync-auvik, stale prune, tunnel stderr |
 
 ## Open — CRT / power-user parity
 
 | Feature | Priority | Effort | Status |
 | --- | --- | --- | --- |
 | Connect bar (adhoc host without save) | P1 | S | **Shipped** — bottom connect + send row |
-| Dependent / chained jump UI polish | P1 | M | **Partial** — connect dialog shows jump hop + jump_hosts route |
+| Dependent / chained jump UI polish | P1 | M | **Shipped** — jump_hosts.yaml multi-hop dial |
 | Chat / send-to-all armable input | P1 | S | **Shipped** — bottom send row restored |
 | Richer script language (Python path) | P1 | L | **Partial** — catalog in `python-scripts/` + run dialog |
-| Named firewall / SOCKS profiles | P2 | M | Open |
+| Named firewall / SOCKS profiles | P2 | M | **Partial** — saved port-forward profiles |
 | CRT re-import merge report | P1 | M | **Shipped** — per-folder merge dialog |
 | Windows OpenSSH agent integration | P1 | M | **Shipped** — OpenSSH agent pipe via `sshcore` |
 | Zmodem / classic modem transfers | P3 | L | Open |
@@ -64,7 +65,7 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 | Per-customer vault scope + break-glass | P0 | L | **Shipped** — customer tags + Settings break-glass |
 | Change-window send-to-customer | P1 | M | **Shipped** — send row + scope: customer |
 | Post-change capture pack per incident | P1 | M | **Shipped** — capturepack + document dialog |
-| Crawl confidence UI + merge suggestions | P1 | M | **Partial** — low-conf filter + merge hint count |
+| Crawl confidence UI + merge suggestions | P1 | M | **Partial** — low-conf filter + merge hints dialog |
 | Shared customer map + live overlay (NOC) | P2 | XL | **Partial** — NOC map view opens latest customer map + browser reload |
 | Customer export handoff package | P2 | M | **Shipped** — Settings → File tab export zip |
 | Serial + SSH dual-path on one node | P2 | M | **Shipped** — `console_fallback` + auto-retry on dial |
@@ -76,7 +77,7 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 | PagerDuty bind + document note | P0 | M | **Shipped** — see [PAGERDUTY-API.md](PAGERDUTY-API.md) |
 | Opsgenie / Jira Service Management adapter | P1 | M | **Shipped (Opsgenie)** — see [OPSGENIE-API.md](OPSGENIE-API.md) |
 | Auto-bind incident from PSA ticket id | P2 | M | **Shipped** — ConnectWise / Autotask / Halo lookup on bind |
-| Upload evidence to ticket PSA (not only PD note) | P2 | L | **Partial** — CW note + document upload; Autotask/Halo notes |
+| Upload evidence to ticket PSA (not only PD note) | P2 | L | **Shipped** — CW/Autotask/Halo note + attachment upload (tenant-dependent) |
 
 ## Explicitly not building (here)
 

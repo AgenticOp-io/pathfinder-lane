@@ -159,6 +159,8 @@ type Settings struct {
 	AuvikTunnelPath string `json:"auvik_tunnel_path,omitempty"`
 	// AuvikAutoTunnel tries AuvikTunnel when direct SSH is unreachable.
 	AuvikAutoTunnel bool `json:"auvik_auto_tunnel,omitempty"`
+	// AuvikPruneStale removes Auvik-sourced sessions missing from inventory on sync.
+	AuvikPruneStale bool `json:"auvik_prune_stale,omitempty"`
 	// Defaults applied to new/merged Auvik sessions without credentials.
 	AuvikDefaultUsername   string `json:"auvik_default_username,omitempty"`
 	AuvikDefaultCredential string `json:"auvik_default_credential,omitempty"`

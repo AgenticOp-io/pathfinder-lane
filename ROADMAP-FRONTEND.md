@@ -32,8 +32,7 @@ Work: https://github.com/AgenticOp-io/pathfinderssh-msp
 
 ## Still open / polish
 
-- Live ConnectWise / Autotask / Halo SDKs (JSON file adapter is the shipped integration point)
-- Auvik: optional AuvikTunnel CLI bridge for collector-only sites (no REST terminal API)
+- Auvik: optional AuvikTunnel CLI bridge for collector-only sites (basic bridge shipped; edge cases remain)
 - Cursor Admin / Analytics enterprise endpoints (models list + Cloud Agents shipped)
 
 ## Auvik (inventory sync)
@@ -43,7 +42,10 @@ Work: https://github.com/AgenticOp-io/pathfinderssh-msp
 | API auth + list tenants/devices | `internal/auvik` |
 | Import/sync IPs → `Customers/<client>/Auvik/` | Settings → File → Import / Sync |
 | Merge existing sessions (Auvik authority for IPs) | `auvik.SyncTenantTree` |
-| Periodic sync all clients | Settings → Tools → Periodic Auvik sync |
+| Periodic sync all clients | Settings → Tools → Periodic Auvik sync (immediate + interval) |
+| Headless `pfseed sync-auvik` | `cmd/pfseed/sync_auvik.go` |
+| Tenant → customer map | `internal/auvik/tenantmap.go` |
+| Stale session prune on sync | Settings → Tools → Prune stale Auvik sessions |
 | AuvikTunnel on unreachable SSH | Settings → Tools → Auto tunnel + `AuvikTunnel` binary |
 | Device SSH passwords from Auvik | **Not available** — API has no login-credential export |
 | Headless SSH via Auvik API | **Not available** — Pathfinder SSH or local AuvikTunnel |

@@ -2,6 +2,7 @@ package halo
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -55,5 +56,31 @@ func (b TicketBridge) PostDocument(ctx context.Context, req psaticket.DocumentRe
 	if err != nil {
 		return err
 	}
-	return b.Client.postJSON(ctx, fmt.Sprintf("/api/Tickets/%s/Actions", id), data, nil)
+	if err := b.Client.postJSON(ctx, fmt.Sprintf("/api/Tickets/%s/Actions", id), data, nil); err != nil {
+		return err
+	}
+	if len(req.FileBytes) > 0 && req.FileName != "" {
+		if err := b.uploadAttachment(ctx, id, req.FileName, req.FileBytes); err != nil {
+			return fmt.Errorf("note posted; attachment failed: %w", err)
+		}
+	}
+	return nil
+}
+
+func (b TicketBridge) uploadAttachment(ctx context.Context, ticketID, filename string, data []byte) error {
+	name := strings.TrimSpace(filename)
+	if name == "" {
+		name = "evidence.zip"
+	}
+	body := map[string]interface{}{
+		"ticket_id": ticketID,
+		"filename":  name,
+		"note":      "Pathfinder engineer evidence pack",
+		"filedate":  base64.StdEncoding.EncodeToString(data),
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	return b.Client.postJSON(ctx, "/api/Attachment", payload, nil)
 }
