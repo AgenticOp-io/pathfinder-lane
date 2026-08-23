@@ -1,10 +1,8 @@
 package installcmd
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/scottpeterman/pathfinderssh/internal/appinstall"
 	"github.com/scottpeterman/pathfinderssh/internal/mspauth"
@@ -58,21 +56,12 @@ func applySetup(opts Options) error {
 		fmt.Println("Solo mode — no Microsoft/Google sign-in required.")
 		return nil
 	}
-	if !opts.Enroll {
-		fmt.Println("Run pfinstall.exe (GUI) or pfinstall.exe -install-gui to finish", setup, "sign-in setup.")
+	if _, ok := mspauth.ParseSetupMode(setup); ok {
+		fmt.Println("Cloud organization setup uses separate tools after install:")
+		fmt.Println("  pfsetup-o365.exe   Microsoft 365 tenant registration")
+		fmt.Println("  pfsetup-google.exe Google Workspace registration")
+		fmt.Println("  pfsetup-apis.exe   API keys for PSA/RMM/inventory")
 		return nil
 	}
-	auth := mspauth.NewAuthenticator(home)
-	p, ok := mspauth.ParseSetupMode(setup)
-	if !ok {
-		return fmt.Errorf("unknown setup mode %q", setup)
-	}
-	enroll := mspauth.Enrollment{Provider: p}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	if _, _, err := auth.EnrollAndVerify(ctx, enroll); err != nil {
-		return fmt.Errorf("enroll %s: %w", setup, err)
-	}
-	fmt.Println("Sign-in setup complete for", setup)
-	return nil
+	return fmt.Errorf("unknown setup mode %q (use solo)", setup)
 }

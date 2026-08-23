@@ -250,6 +250,7 @@ func Defaults() Settings {
 		AntiIdleKeystroke:   antiIdleDefaultKeystroke,
 		TreeExpandStyle:     DefaultTreeExpandStyle,
 		SftpShowHome:        false,
+		TroubleshootAddon:   true,
 	}
 }
 

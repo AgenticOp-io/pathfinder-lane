@@ -6,7 +6,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// MSPIntegrationActions are File-tab import/sync handlers (MSP cloud sign-in only).
+// MSPIntegrationActions are File-tab import/sync handlers (all MSP enrollments).
 type MSPIntegrationActions struct {
 	OnImportAuvik      func()
 	OnSyncAuvik        func()
@@ -311,7 +311,7 @@ func (p *MSPIntegrationPanel) content() fyne.CanvasObject {
 	return container.NewVBox(
 		widget.NewLabelWithStyle("MSP integration stack", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel("Three layers work together: PSA customers → inventory IPs → vault credentials.\n"+
-			"Use File tab actions to sync. Solo installs hide this section."),
+			"Use File tab actions to sync after saving credentials here or in pfsetup-apis."),
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Shared inventory defaults", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		form(

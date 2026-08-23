@@ -5,11 +5,11 @@ package appinstall
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/scottpeterman/pathfinderssh/internal/product"
+	"github.com/scottpeterman/pathfinderssh/internal/winexec"
 )
 
 // CreateShortcuts writes Start Menu and Desktop .lnk files pointing at exe.
@@ -94,7 +94,7 @@ func desktopDir() string {
 			}
 		}
 	}
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
+	out, err := winexec.Command("powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
 		"[Environment]::GetFolderPath('Desktop')").Output()
 	if err == nil {
 		p := strings.TrimSpace(string(out))
@@ -112,7 +112,7 @@ func writeShortcut(lnk, target, workdir string) error {
 		`$s = (New-Object -ComObject WScript.Shell).CreateShortcut(%s); $s.TargetPath = %s; $s.WorkingDirectory = %s; $s.Description = %s; $s.Save()`,
 		psQuote(lnk), psQuote(target), psQuote(workdir), psQuote(product.Name),
 	)
-	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps)
+	cmd := winexec.Command("powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("shortcut %s: %w (%s)", lnk, err, strings.TrimSpace(string(out)))

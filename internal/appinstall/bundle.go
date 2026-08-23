@@ -9,7 +9,10 @@ import (
 )
 
 // BundledTools are optional CLI/GUI companions copied beside pathfinder.exe.
-var BundledTools = []string{"pathfinder", "pfseed", "pfinstall", "pfenroll"}
+var BundledTools = []string{
+	"pathfinder", "pfseed", "pfinstall", "pfengineer-install",
+	"pfsetup-o365", "pfsetup-google", "pfsetup-apis",
+}
 
 func exeName(base string) string {
 	if runtime.GOOS == "windows" {

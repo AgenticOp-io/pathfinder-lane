@@ -3926,26 +3926,21 @@ func (h *host) manageVault() {
 }
 
 // runInstallGUI opens the graphical installer (solo / Microsoft 365 / Google).
-func runInstallGUI(setupPreset, ver string) {
+func runInstallGUI(_setupPreset, ver string) {
 	a := app.NewWithID("com.pathfinder.installer")
 	ui.LoadUserThemes()
-	base, _ := ui.LoadSettings(ui.SettingsPath())
-	ui.SetSettings(base)
-	ui.ApplyAppTheme(a, base.AppVariant())
+	ui.ApplyInstallerTheme(a)
 	if icon := ui.AppIcon(); icon != nil {
 		a.SetIcon(icon)
 	}
 	w := a.NewWindow("Install PathfinderSSH")
-	w.Resize(fyne.NewSize(640, 520))
+	w.Resize(fyne.NewSize(720, 580))
 	w.CenterOnScreen()
 
 	home := ui.GetAppHome()
-	auth := mspauth.NewAuthenticator(home)
 	ui.ShowInstallWizard(w, ui.InstallWizardOptions{
-		Version:     ver,
-		PresetSetup: setupPreset,
-		Home:        home,
-		Enroll:      auth.EnrollAndVerify,
+		Version: ver,
+		Home:    home,
 	})
 	w.ShowAndRun()
 }

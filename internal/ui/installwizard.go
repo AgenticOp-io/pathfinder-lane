@@ -1,12 +1,12 @@
 package ui
 
 import (
-	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -15,255 +15,251 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/scottpeterman/pathfinderssh/internal/appinstall"
-	"github.com/scottpeterman/pathfinderssh/internal/idp"
 	"github.com/scottpeterman/pathfinderssh/internal/mspauth"
+	"github.com/scottpeterman/pathfinderssh/internal/mspbranding"
 )
 
-// InstallWizardOptions wires the graphical installer.
+const installPhaseTotal = 2 // ready, complete (progress is transient)
+
+// InstallWizardOptions wires the graphical file installer (no cloud OAuth).
 type InstallWizardOptions struct {
-	Version     string
-	PresetSetup string
-	Home        string
-	Enroll      EnrollHandler
+	Version string
+	Home    string
 }
 
-// ShowInstallWizard runs the multi-step install UI in w.
+// ShowInstallWizard runs a short install flow: ready → progress → complete.
 func ShowInstallWizard(w fyne.Window, opts InstallWizardOptions) {
 	if w == nil {
 		return
 	}
-	preset, hasPreset := mspauth.ParseSetupMode(opts.PresetSetup)
-	if !hasPreset {
-		preset = idp.ProviderLocal
-	}
 
 	var (
-		step       int
+		phase      int
 		destExe    string
-		accessForm *AccessSetupForm
+		soloMode   = widget.NewCheck("Solo mode (local vault — configure Auvik, PSA, and Cursor without Microsoft/Google sign-in)", nil)
 		bodySlot   = container.NewMax()
-		backBtn    = widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), nil)
-		nextBtn    = widget.NewButtonWithIcon("Next", theme.NavigateNextIcon(), nil)
+		stepBar    = widget.NewProgressBar()
+		installBtn = widget.NewButtonWithIcon("Install", theme.DownloadIcon(), nil)
 		cancelBtn  = widget.NewButton("Cancel", func() { fyne.CurrentApp().Quit() })
 	)
+	soloMode.SetChecked(true)
+	installBtn.Importance = widget.HighImportance
+	stepBar.SetValue(0)
 
-	title := widget.NewLabelWithStyle("Install PathfinderSSH", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	bundleDir := bundleDirFromExe()
+	title, subtitle := brandedInstallTitles(bundleDir)
+	if hasBundleEnrollment(bundleDir) {
+		soloMode.SetChecked(false)
+		soloMode.Hide()
+	}
 
-	var showStep func()
+	hero := installWizardHero(title, subtitle)
+
+	var showPhase func()
 
 	runInstall := func() {
-		if accessForm == nil {
-			return
-		}
-		if err := accessForm.Validate(); err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-		enroll := accessForm.Enrollment()
-		step = 3
-		showStep()
+		phase = 1
+		showPhase()
 
 		go func() {
 			dest, err := installToAppData()
 			if err != nil {
 				fyne.Do(func() {
-					step = 2
-					showStep()
-					cancelBtn.Show()
+					phase = 0
+					showPhase()
 					dialog.ShowError(err, w)
 				})
 				return
 			}
 			destExe = dest
 
-			enrollFn := opts.Enroll
-			if enrollFn == nil {
-				auth := mspauth.NewAuthenticator(opts.Home)
-				enrollFn = auth.EnrollAndVerify
-			}
-
-			if enroll.Provider == mspauth.ProviderLocal {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				_, _, enrollErr := enrollFn(ctx, enroll)
-				fyne.Do(func() {
-					if enrollErr != nil {
-						step = 2
-						showStep()
-						cancelBtn.Show()
-						dialog.ShowError(enrollErr, w)
-						return
-					}
-					step = 4
-					showStep()
-				})
-				return
+			if soloMode.Checked {
+				home := strings.TrimSpace(opts.Home)
+				if home == "" {
+					home = GetAppHome()
+				}
+				if err := mspauth.SaveSoloSetup(home); err != nil {
+					fyne.Do(func() {
+						phase = 0
+						showPhase()
+						dialog.ShowError(err, w)
+					})
+					return
+				}
 			}
 
 			fyne.Do(func() {
-				progress := dialog.NewCustomWithoutButtons("Signing in",
-					widget.NewLabel("Complete sign-in in your browser, then return here…"), w)
-				progress.Show()
-				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-					defer cancel()
-					_, _, enrollErr := enrollFn(ctx, enroll)
-					fyne.Do(func() {
-						progress.Hide()
-						if enrollErr != nil {
-							step = 2
-							showStep()
-							cancelBtn.Show()
-							dialog.ShowError(enrollErr, w)
-							return
-						}
-						step = 4
-						showStep()
-					})
-				}()
+				phase = 2
+				showPhase()
 			})
 		}()
 	}
 
-	showStep = func() {
-		backBtn.Disable()
-		nextBtn.SetText("Next")
-		nextBtn.SetIcon(theme.NavigateNextIcon())
+	installBtn.OnTapped = runInstall
 
-		switch step {
+	showPhase = func() {
+		stepBar.SetValue(float64(phase) / float64(installPhaseTotal))
+
+		switch phase {
 		case 0:
 			ver := strings.TrimSpace(opts.Version)
 			if ver != "" {
-				ver = " · " + ver
+				ver = "Version " + ver
 			}
 			bodySlot.Objects = []fyne.CanvasObject{
 				container.NewVBox(
-					widget.NewLabel("Welcome! This copies PathfinderSSH MSP to your user folder\n"+
-						"(pathfinder, pfseed, installer tools), creates shortcuts, and sets up sign-in."),
-					widget.NewLabel("Free software (GPL-3.0). Source: github.com/AgenticOp-io/pathfinderssh-msp"+ver),
-					widget.NewLabel("Step 1 of 3 — Welcome"),
+					hero,
+					stepBar,
+					widget.NewCard(
+						"Ready to install",
+						"Copies apps to AppData and creates shortcuts",
+						container.NewVBox(
+							widget.NewLabel("Includes: pathfinder, pfseed, integration setup tools, and installers."),
+							widget.NewLabel("Your sessions and vault in ~/.pathfinderssh are kept when you update."),
+							soloMode,
+							widget.NewLabel(ver),
+						),
+					),
+					widget.NewLabel("Cloud full MSP setup (Microsoft 365 / Google) runs separately after install."),
 				),
 			}
-			backBtn.Hide()
+			installBtn.Show()
+			cancelBtn.Show()
 		case 1:
-			if hasPreset {
-				step = 2
-				showStep()
-				return
-			}
 			bodySlot.Objects = []fyne.CanvasObject{
 				container.NewVBox(
-					widget.NewLabel("Step 2 of 3 — How do you sign in?"),
-					widget.NewLabel("Solo needs no Microsoft or Google app registration."),
-					makeModePicker(func(p idp.Provider) {
-						preset = p
-						step = 2
-						showStep()
-					}),
+					hero,
+					stepBar,
+					widget.NewCard(
+						"Installing",
+						"Copying files",
+						container.NewVBox(
+							widget.NewLabel("Installing PathfinderSSH MSP…"),
+							widget.NewProgressBarInfinite(),
+						),
+					),
 				),
 			}
-			backBtn.Show()
-			nextBtn.Hide()
-		case 2:
-			accessForm = NewAccessSetupForm(w, preset)
-			accessForm.SetProvider(preset)
-			bodySlot.Objects = []fyne.CanvasObject{
-				container.NewVBox(
-					widget.NewLabel("Step 3 of 3 — Sign-in details"),
-					accessForm.Content(),
-				),
-			}
-			backBtn.Show()
-			if !hasPreset {
-				backBtn.OnTapped = func() { step = 1; showStep() }
-			} else {
-				backBtn.OnTapped = func() { step = 0; showStep() }
-			}
-			nextBtn.Show()
-			nextBtn.SetText("Install")
-			nextBtn.SetIcon(theme.DownloadIcon())
-			nextBtn.OnTapped = runInstall
-		case 3:
-			bodySlot.Objects = []fyne.CanvasObject{
-				container.NewVBox(
-					widget.NewLabel("Installing…"),
-					widget.NewLabel("Copying files and creating shortcuts."),
-				),
-			}
-			backBtn.Hide()
-			nextBtn.Hide()
+			installBtn.Hide()
 			cancelBtn.Hide()
-		case 4:
-			msg := "Installed to:\n" + destExe + "\n\nDesktop and Start Menu shortcuts are ready."
+		case 2:
+			msg := "Installed to:\n" + destExe
 			openBtn := widget.NewButtonWithIcon("Open PathfinderSSH", theme.MediaPlayIcon(), func() {
 				if destExe != "" {
 					launchInstalled(destExe)
 				}
 				fyne.CurrentApp().Quit()
 			})
+			openBtn.Importance = widget.HighImportance
+
+			apiBtn := widget.NewButtonWithIcon("Standalone MSP setup (Auvik, APIs, Cursor AI)", theme.SettingsIcon(), func() {
+				launchBundledTool("pfsetup-apis", w)
+			})
+			m365Btn := widget.NewButtonWithIcon("Full MSP setup — Microsoft 365", theme.ComputerIcon(), func() {
+				launchBundledTool("pfsetup-o365", w)
+			})
+			googleBtn := widget.NewButtonWithIcon("Full MSP setup — Google Workspace", theme.ComputerIcon(), func() {
+				launchBundledTool("pfsetup-google", w)
+			})
 			closeBtn := widget.NewButton("Close", func() { fyne.CurrentApp().Quit() })
+
 			bodySlot.Objects = []fyne.CanvasObject{
 				container.NewVBox(
-					widget.NewLabelWithStyle("Done!", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-					widget.NewLabel(msg),
-					container.NewHBox(openBtn, closeBtn),
+					hero,
+					stepBar,
+					widget.NewCard(
+						"Installation complete",
+						"Run full MSP setup or open Pathfinder",
+						container.NewVBox(
+							widget.NewLabel(msg),
+							widget.NewLabel("MSP admin next steps (auth, security, engineer packages):"),
+							container.NewVBox(m365Btn, googleBtn),
+							widget.NewLabel("Standalone / solo: configure integrations and Cursor without cloud sign-in:"),
+							apiBtn,
+							container.NewHBox(openBtn, closeBtn),
+						),
+					),
 				),
 			}
-			backBtn.Hide()
-			nextBtn.Hide()
+			installBtn.Hide()
 			cancelBtn.Hide()
 		}
 		bodySlot.Refresh()
 	}
 
-	nextBtn.OnTapped = func() {
-		if step == 0 {
-			if hasPreset {
-				step = 2
-			} else {
-				step = 1
-			}
-			showStep()
-		}
-	}
-	backBtn.OnTapped = func() {
-		if step == 2 && !hasPreset {
-			step = 1
-		} else if step >= 2 {
-			step = 0
-		}
-		showStep()
-	}
-
-	footer := container.NewBorder(nil, nil, backBtn, container.NewHBox(cancelBtn, nextBtn), nil)
-	root := container.NewBorder(title, footer, nil, nil, container.NewPadded(bodySlot))
+	footer := container.NewBorder(nil, nil, nil, container.NewHBox(cancelBtn, installBtn), nil)
+	root := container.NewBorder(nil, container.NewPadded(footer), nil, nil, container.NewPadded(bodySlot))
 	w.SetContent(root)
-	showStep()
+	showPhase()
 }
 
-func makeModePicker(onPick func(idp.Provider)) fyne.CanvasObject {
-	solo := widget.NewButtonWithIcon(idp.ProviderLocal.ChoiceLabel(), theme.AccountIcon(), func() {
-		onPick(idp.ProviderLocal)
-	})
-	solo.Importance = widget.HighImportance
+func launchBundledTool(name string, w fyne.Window) {
+	if err := appinstall.LaunchTool(name); err != nil {
+		dialog.ShowError(fmt.Errorf("launch %s: %w", name, err), w)
+	}
+}
 
-	ms := widget.NewButtonWithIcon(idp.ProviderEntra.ChoiceLabel(), theme.ComputerIcon(), func() {
-		onPick(idp.ProviderEntra)
-	})
-	google := widget.NewButtonWithIcon(idp.ProviderGoogle.ChoiceLabel(), theme.ComputerIcon(), func() {
-		onPick(idp.ProviderGoogle)
-	})
-	return container.NewVBox(solo, ms, google)
+func installWizardHero(title, subtitle string) fyne.CanvasObject {
+	titleLbl := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	subLbl := widget.NewLabel(subtitle)
+	text := container.NewVBox(titleLbl, subLbl)
+	if ic := AppIcon(); ic != nil {
+		return container.NewHBox(widget.NewIcon(ic), container.NewPadded(text))
+	}
+	return text
+}
+
+func brandedInstallTitles(bundleDir string) (title, subtitle string) {
+	title = "PathfinderSSH MSP"
+	subtitle = "Install tools for this Windows profile"
+	if bundleDir != "" {
+		if b, ok, _ := mspbranding.LoadFile(filepath.Join(bundleDir, "msp-branding.json")); ok {
+			title = b.InstallTitle()
+			subtitle = b.InstallSubtitle()
+			return title, subtitle
+		}
+	}
+	if b, ok, _ := mspbranding.Load(); ok {
+		title = b.InstallTitle()
+		subtitle = b.InstallSubtitle()
+	}
+	return title, subtitle
+}
+
+func bundleDirFromExe() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
+func hasBundleEnrollment(bundleDir string) bool {
+	if bundleDir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(bundleDir, "msp-enrollment.json"))
+	return err == nil
 }
 
 func installToAppData() (string, error) {
-	dest, _, err := appinstall.Ensure()
+	packDir := bundleDirFromExe()
+	if err := appinstall.StageOrgBundleFrom(packDir); err != nil {
+		return "", fmt.Errorf("stage organization files: %w", err)
+	}
+	toolDir := packDir
+	bundleSub := filepath.Join(packDir, "bundle")
+	if st, err := os.Stat(filepath.Join(bundleSub, "pathfinder.exe")); err == nil && !st.IsDir() {
+		toolDir = bundleSub
+	}
+	dest, _, err := appinstall.EnsureFrom(toolDir)
 	if err != nil {
 		return "", fmt.Errorf("copy to AppData: %w", err)
 	}
 	if err := appinstall.CreateShortcuts(dest); err != nil {
 		return "", fmt.Errorf("create shortcuts: %w", err)
 	}
+	SetLogoPath(mspbranding.LogoPath())
 	return dest, nil
 }
 

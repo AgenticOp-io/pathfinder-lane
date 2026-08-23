@@ -17,6 +17,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/halo"
 	"github.com/scottpeterman/pathfinderssh/internal/hudu"
 	"github.com/scottpeterman/pathfinderssh/internal/invsync"
+	"github.com/scottpeterman/pathfinderssh/internal/mspauth"
 	"github.com/scottpeterman/pathfinderssh/internal/mspsync"
 	"github.com/scottpeterman/pathfinderssh/internal/ninja"
 	"github.com/scottpeterman/pathfinderssh/internal/ncentral"
@@ -27,7 +28,7 @@ import (
 )
 
 func (h *host) mspIntegrationsEnabled() bool {
-	return h.mspEnrollment.Provider.RequiresCloudLogin()
+	return mspauth.IntegrationsEnabled(h.mspEnrollment)
 }
 
 func (h *host) mspInventoryDefaults() (user, cred string) {

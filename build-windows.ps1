@@ -128,6 +128,8 @@ if ($select.Count -eq 1 -and $select[0] -eq "all") {
     $list = $all
 } elseif ($select.Count -eq 1 -and $select[0] -eq "gui") {
     $list = @($all | Where-Object { Test-Gui $_ })
+} elseif ($select.Count -eq 1 -and $select[0] -eq "installers") {
+    $list = @("pathfinder", "pfseed", "pfinstall", "pfengineer-install", "pfsetup-o365", "pfsetup-google", "pfsetup-apis")
 } elseif ($select.Count -eq 1 -and $select[0] -eq "cli") {
     $list = @($all | Where-Object { -not (Test-Gui $_) })
 } else {
@@ -153,8 +155,6 @@ foreach ($app in $list) {
     }
 
     $gui = Test-Gui $app
-    # pfinstall is the primary CLI installer — keep a console for -install / -update output.
-    if ($app -eq "pfinstall") { $gui = $false }
     if ($gui) { $kind = "gui" } else { $kind = "cli" }
 
     $ld = @()

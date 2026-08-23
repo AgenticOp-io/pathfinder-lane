@@ -1,8 +1,8 @@
 package mspauth
 
-// IntegrationsEnabled is true when the org enrolled with cloud MSP sign-in
-// (Microsoft 365 or Google). Solo/local installs hide integration settings
-// and import actions to keep the UI simple.
-func IntegrationsEnabled(enroll Enrollment) bool {
-	return enroll.Provider.RequiresCloudLogin()
+// IntegrationsEnabled is true when the MSP integration stack (Auvik, PSA, vault,
+// incidents, Cursor AI) should be available. Cloud sign-in is not required —
+// solo and standalone installs configure integrations locally.
+func IntegrationsEnabled(_ Enrollment) bool {
+	return true
 }

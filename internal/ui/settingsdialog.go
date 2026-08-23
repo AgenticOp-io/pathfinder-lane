@@ -72,7 +72,7 @@ type SettingsFormOptions struct {
 	OnImportCrawlCSV  func()
 	OnSyncCustomers   func()
 
-	// MSP cloud sign-in only — hides integration Tools/File sections in solo mode.
+	// MSP integration Tools/File sections (solo, cloud, and engineer standalone).
 	MSPIntegrationsEnabled bool
 	MSPActions             *MSPIntegrationActions
 

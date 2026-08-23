@@ -1,115 +1,94 @@
 # Install and update
 
-**Primary installer:** `pfinstall.exe` — graphical wizard or command-line flags. No PowerShell required.
+PathfinderSSH MSP has **two install paths**:
 
-Download or build the Windows bundle (`pathfinder.exe`, `pfseed.exe`, `pfinstall.exe`, `pfenroll.exe` in one folder), then run the installer from that folder or pass `-from`.
+| Who | Tool | What it does |
+| --- | --- | --- |
+| **MSP admin / IT** | `pfinstall.exe` | Copies the full admin bundle to AppData (pathfinder, pfseed, setup tools) |
+| **MSP admin / IT** | `pfsetup-o365.exe` or `pfsetup-google.exe` | **Full MSP setup:** branding → cloud auth → security policy → API integrations → engineer package |
+| **Engineer** | `*-Engineer-Install.exe` (from admin package) | **Standalone MSP client:** branding, sign-in, security, APIs pre-applied — **no** admin auth or security tools |
 
-## Graphical install
+## IT / admin install (`pfinstall.exe`)
 
-Double-click `pfinstall.exe`, or:
-
-```cmd
-pfinstall.exe
-pfinstall.exe -install-gui
-pfinstall.exe -install-gui -setup o365
-```
-
-After a prior install: Start Menu → **Install PathfinderSSH**.
-
-## Command-line install
-
-```cmd
-pfinstall.exe -install
-pfinstall.exe -install -setup solo
-pfinstall.exe -update
-pfinstall.exe -install -setup o365 -enroll
-pfinstall.exe -from C:\path\to\bundle -install
-pfinstall.exe -uninstall
-pfinstall.exe -version
-```
-
-| Flag | Purpose |
+| Action | Command |
 | --- | --- |
-| `-install` | Copy bundle to AppData, create shortcuts |
-| `-update` | Refresh installed binaries (keeps user data) |
-| `-install-gui` | Graphical wizard |
-| `-uninstall` | Remove AppData install and shortcuts |
-| `-setup solo\|o365\|google` | Configure access mode during install |
-| `-enroll` | Complete cloud OAuth during CLI install (opens browser) |
-| `-from <dir>` | Bundle folder (default: directory containing `pfinstall.exe`) |
-| `-version` | Print installer version |
+| Graphical install | Double-click `pfinstall.exe` or `pfinstall.exe -install-gui` |
+| Silent install | `pfinstall.exe -install` |
+| Solo mode (CLI) | `pfinstall.exe -install -setup solo` |
+| Update binaries | `pfinstall.exe -update` |
+| Uninstall | `pfinstall.exe -uninstall` |
 
-Cloud sign-in without `-enroll` installs binaries only; finish sign-in in the GUI wizard or app.
+Flow: **Ready → Install → Complete**. Optional Solo checkbox (local vault + standalone MSP stack). After install, run **full MSP setup** (M365/Google) or **standalone MSP setup** (`pfsetup-apis`) for Auvik, PSA, and Cursor AI without cloud sign-in.
 
-**Update** (rebuild from source, then reinstall):
+## Full MSP admin setup (`pfsetup-o365.exe` / `pfsetup-google.exe`)
 
-```cmd
-build-windows.ps1 -Targets pathfinder,pfseed,pfinstall,pfenroll
-dist\windows\pfinstall.exe -update
-```
+Run once per tenant (super admin). Six-step wizard:
 
-Or one step after build:
+1. **Branding** — org name, product title, logo (`msp-branding.json`, `logo.png`)
+2. **Cloud authentication** — Entra or Google OAuth app registration
+3. **Verify tenant sign-in** — saves `msp-enrollment.json`
+4. **Security policy** — read-only mode, change windows, vault break-glass (`msp-security-policy.json`)
+5. **API integrations & Cursor AI** — Auvik, PSA, RMM, vault, incidents, Cursor troubleshoot addon (`msp-engineer-settings.json` snapshot)
+6. **Engineer standalone package** — branded folder with `YourOrg-Engineer-Install.exe`
 
-```cmd
-build-windows.ps1 -Targets pathfinder,pfseed,pfinstall,pfenroll -Install -Setup solo
-```
+The engineer package contains only `pathfinder.exe` and `pfseed.exe` in `bundle\` — not master setup or API admin exes.
 
-Preserves `%USERPROFILE%\.pathfinderssh\` data (sessions, vault, maps).
+## Engineer standalone install (`pfengineer-install.exe` / branded copy)
 
-## Alternate entry points
+Distribute the folder from step 6 above. Engineers:
 
-`pathfinder.exe` also accepts `-install`, `-install-gui`, `-uninstall` for convenience when the main app binary is already on PATH. Prefer `pfinstall.exe` for distribution and scripting.
+1. Double-click `YourOrg-Engineer-Install.exe`
+2. Click **Install**
+3. Open Pathfinder and sign in with their work account
 
-## Installed layout
+Pre-staged from the package: enrollment, branding, security policy, API settings, Cursor AI. Engineers do **not** run Azure/Google registration or security admin tools. Add or change Auvik and other integrations in **Settings → Tools** after install.
 
-| Path | Contents |
+## Standalone MSP setup (`pfsetup-apis.exe`)
+
+No cloud sign-in required. Configure:
+
+- **Integrations** — Auvik, Domotz, PSA, RMM, IT Glue, Hudu, Passportal, PagerDuty, Opsgenie, etc.
+- **Cursor AI** — API key and Troubleshoot addon (side pane + Ops agent)
+
+Use after solo install, or when integrations change without re-running full MSP admin setup.
+
+## API integration setup (standalone admin tool)
+
+| Tool | Purpose |
 | --- | --- |
-| `%LOCALAPPDATA%\PathfinderSSH-MSP\bin\pathfinder.exe` | Main app |
-| `%LOCALAPPDATA%\PathfinderSSH-MSP\bin\pfseed.exe` | Headless seeds / Auvik sync |
-| `%LOCALAPPDATA%\PathfinderSSH-MSP\bin\pfinstall.exe` | Installer |
-| `%LOCALAPPDATA%\PathfinderSSH-MSP\bin\pfenroll.exe` | Org enrollment (super admin) |
+| `pfsetup-apis.exe` | Standalone MSP setup: Auvik, PSA, vault, incidents, **Cursor AI** |
 
-Shortcuts: **PathfinderSSH MSP** (app), **Install PathfinderSSH** (wizard).
+Also embedded in the full MSP wizard (step 5). Use standalone when integrations or Cursor change without re-running cloud auth.
 
-## Build from source
+Covers: Auvik, Domotz, NinjaOne, Datto, Automate, N-central, IT Glue, Hudu, Passportal, ConnectWise, Autotask, Halo, PagerDuty, Opsgenie.
+
+## Bundled admin layout
+
+`%LOCALAPPDATA%\PathfinderSSH-MSP\bin\`
+
+| Binary | Role |
+| --- | --- |
+| `pathfinder.exe` | Main app |
+| `pfseed.exe` | Headless sync / seeds |
+| `pfinstall.exe` | IT file installer |
+| `pfsetup-o365.exe` | Full MSP setup (Microsoft 365) |
+| `pfsetup-google.exe` | Full MSP setup (Google Workspace) |
+| `pfsetup-apis.exe` | Standalone MSP setup (integrations + Cursor AI) |
+| `pfengineer-install.exe` | Template for engineer packages (admin use only) |
+
+## Build
 
 ```powershell
-.\build-windows.ps1 -Targets pathfinder,pfseed,pfinstall,pfenroll
+.\build-windows.ps1 -Targets installers
 ```
 
-`pfinstall.exe` is built as a console-capable binary (CLI output works from `cmd.exe` and PowerShell). Fyne GUI apps use `-H windowsgui` except the installer.
+Builds: pathfinder, pfseed, pfinstall, pfengineer-install, pfsetup-o365, pfsetup-google, pfsetup-apis.
 
-## User data paths
+## User data
 
 | Path | Contents |
 | --- | --- |
-| `%LOCALAPPDATA%\PathfinderSSH-MSP\` | Install root, enrollment JSON |
-| `%USERPROFILE%\.pathfinderssh\` | sessions.yaml, vault, maps, settings |
-| `%USERPROFILE%\.pathfinderssh\maps\<Customer>\` | Per-customer topology JSON |
-
-## First launch
-
-1. Unlock or create **vault** (all modes)
-2. Optional: Settings → Tools → Auvik / IT Glue
-3. Import SecureCRT or sync Auvik
-4. Select a session → connect
-
-## Cloud sign-in setup (first time)
-
-**Solo** — no cloud app registration. Enrollment: `%LOCALAPPDATA%\PathfinderSSH-MSP\msp-enrollment.json` (`provider: local`).
-
-**Microsoft 365** (~5 minutes):
-
-1. Azure → App registrations → New registration (`PathfinderSSH`, single tenant)
-2. Redirect URI (Web): `http://127.0.0.1:53682/callback`
-3. Authentication → Allow public client flows: **Yes**
-4. Copy Tenant ID and Client ID into the install wizard or `pfinstall.exe -install-gui -setup o365`
-
-**Google** (~5 minutes):
-
-1. Google Cloud Console → Credentials → OAuth client ID (Desktop or Web + redirect above)
-2. Copy Client ID into the wizard or `pfinstall.exe -install-gui -setup google`
-
-Change mode later: delete `msp-enrollment.json` and re-run `pfinstall.exe -install -setup solo|o365|google`. Sessions and vault under `~\.pathfinderssh` are kept.
+| `%LOCALAPPDATA%\PathfinderSSH-MSP\` | Install root, `msp-enrollment.json`, branding, security policy |
+| `%USERPROFILE%\.pathfinderssh\` | sessions, vault, maps, `settings.json` |
 
 Full auth detail: [AUTH.md](AUTH.md).

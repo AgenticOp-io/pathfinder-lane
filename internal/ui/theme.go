@@ -102,7 +102,10 @@ func (t *NativeTheme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color
 }
 
 func (t *NativeTheme) Font(style fyne.TextStyle) fyne.Resource {
-	return theme.DefaultTheme().Font(style)
+	if style.Monospace {
+		return theme.DefaultTheme().Font(style)
+	}
+	return chromeFont(style)
 }
 
 func (t *NativeTheme) Size(name fyne.ThemeSizeName) float32 {
@@ -111,11 +114,11 @@ func (t *NativeTheme) Size(name fyne.ThemeSizeName) float32 {
 	// cramped. Everything else falls through to the default theme.
 	switch name {
 	case theme.SizeNameText:
-		return 12 // default 14
+		return 14 // readable UI labels (default Fyne 14; was 12 compact)
 	case theme.SizeNameInnerPadding:
-		return 6 // default 8; trims the inset around label/entry/button content
+		return 7
 	case theme.SizeNamePadding:
-		return 3 // default 4; trims spacing between widgets in layouts
+		return 4
 	}
 	return theme.DefaultTheme().Size(name)
 }

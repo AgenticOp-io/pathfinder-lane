@@ -86,7 +86,7 @@ func NewAccessSetupForm(w fyne.Window, preset idp.Provider) *AccessSetupForm {
 		),
 	)
 	soloNote := widget.NewLabel("No Microsoft or Google login. Your Windows user is enough.\n"+
-		"Create a vault password when prompted — credentials stay on this PC.")
+		"Configure Auvik, PSA, vault, and Cursor AI in Settings → Tools or pfsetup-apis.exe after install.")
 
 	entraBox.Hide()
 	googleBox.Hide()

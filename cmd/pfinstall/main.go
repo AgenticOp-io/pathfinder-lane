@@ -11,7 +11,6 @@
 //   pfinstall.exe -install
 //   pfinstall.exe -install -setup solo
 //   pfinstall.exe -update
-//   pfinstall.exe -install -setup o365 -enroll
 //   pfinstall.exe -from C:\path\to\dist\windows -install
 //   pfinstall.exe -uninstall
 //   pfinstall.exe -version
@@ -28,7 +27,6 @@ import (
 
 	"github.com/scottpeterman/pathfinderssh/internal/appinstall"
 	"github.com/scottpeterman/pathfinderssh/internal/installcmd"
-	"github.com/scottpeterman/pathfinderssh/internal/mspauth"
 	"github.com/scottpeterman/pathfinderssh/internal/ui"
 	"github.com/scottpeterman/pathfinderssh/internal/winconsole"
 )
@@ -145,25 +143,21 @@ func wantsCLI(args []string) bool {
 }
 
 func runInstallGUI(setupPreset string) {
-	winconsole.Hide()
 	a := app.NewWithID("com.pathfinder.pfinstall")
 	ui.LoadUserThemes()
-	base, _ := ui.LoadSettings(ui.SettingsPath())
-	ui.SetSettings(base)
-	ui.ApplyAppTheme(a, base.AppVariant())
+	ui.ApplyInstallerTheme(a)
 	if icon := ui.AppIcon(); icon != nil {
 		a.SetIcon(icon)
 	}
 	w := a.NewWindow("Install PathfinderSSH MSP")
-	w.Resize(fyne.NewSize(640, 520))
+	w.Resize(fyne.NewSize(720, 580))
 	w.CenterOnScreen()
 
 	home := ui.GetAppHome()
-	auth := mspauth.NewAuthenticator(home)
+	_ = setupPreset
 	ui.ShowInstallWizard(w, ui.InstallWizardOptions{
-		PresetSetup: setupPreset,
-		Home:        home,
-		Enroll:      auth.EnrollAndVerify,
+		Version: version,
+		Home:    home,
 	})
 	w.ShowAndRun()
 }
