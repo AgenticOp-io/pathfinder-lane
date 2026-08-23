@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/scottpeterman/pathfinderssh/internal/auvik"
 )
 
 // Bounds the form enforces. The paste and interval ceilings are not physical
@@ -350,7 +352,11 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 	out.TroubleshootAddon = f.TroubleshootAddon
 	out.AuvikUsername = strings.TrimSpace(f.AuvikUsername)
 	out.AuvikAPIKey = strings.TrimSpace(f.AuvikAPIKey)
-	out.AuvikBaseURL = strings.TrimSpace(f.AuvikBaseURL)
+	if u := strings.TrimSpace(f.AuvikBaseURL); u != "" {
+		out.AuvikBaseURL = auvik.ResolveBaseURL(u)
+	} else {
+		out.AuvikBaseURL = ""
+	}
 	out.AuvikSyncEnabled = f.AuvikSyncEnabled
 	if n, err := settingsInt("Auvik sync interval", f.AuvikSyncInterval, 5, 1440); err != nil {
 		errs = appendErr(errs, err)

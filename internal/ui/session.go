@@ -259,7 +259,9 @@ func (s *Session) Attach(tp term.Transport) error {
 	s.startAntiIdle(ctx)
 
 	go s.readLoop(ctx)
-	go s.watchDone()
+	// Pass this transport so a later Reattach/Close cannot let an old
+	// watchDone emit Disconnected after a new connection is already up.
+	go s.watchDone(tp)
 
 	s.emitState(StateConnected)
 	return nil
@@ -307,13 +309,20 @@ func (s *Session) syncSize() {
 // transport already knows whether the end was a failure, and duplicating that
 // judgement in two goroutines is how the old code ended up matching on error
 // text.
-func (s *Session) watchDone() {
-	tp := s.transport()
+func (s *Session) watchDone(tp term.Transport) {
 	if tp == nil {
 		return
 	}
 	<-tp.Done()
 	s.stopAntiIdle()
+
+	// Ignore teardown of a transport that is no longer current (reconnect).
+	s.tpMu.RLock()
+	stale := s.tp != tp
+	s.tpMu.RUnlock()
+	if stale {
+		return
+	}
 
 	if err := tp.Err(); err != nil {
 		// Non-nil means the far end went away on its own: a reset, a broken
@@ -608,6 +617,13 @@ func (s *Session) State() ConnectionState {
 		return StateConnected
 	}
 	return StateDisconnected
+}
+
+// Reattach replaces the transport while keeping the terminal widget and
+// scrollback. Safe when the previous connection is dead or still live.
+func (s *Session) Reattach(tp term.Transport) error {
+	_ = s.Close()
+	return s.Attach(tp)
 }
 
 // Close tears the session down locally. It is safe to call on an already-dead

@@ -56,7 +56,8 @@ func SessionNodes(devices []Device, opts ImportOptions) ([]sessions.Node, Import
 
 // ImportOptions filters and defaults for session import.
 type ImportOptions struct {
-	// NetworkGearOnly skips workstations/printers unless login is authorized.
+	// NetworkGearOnly keeps switches/routers/firewalls/APs plus servers/VMs/hypervisors;
+	// skips end-user gear (workstations, printers, phones, cameras, etc.).
 	NetworkGearOnly bool
 	// RequireLoginAuthorized skips devices whose Auvik login status is not authorized/privileged.
 	RequireLoginAuthorized bool
@@ -71,22 +72,32 @@ func (o ImportOptions) withDefaults() ImportOptions {
 // WantDevice applies import filters.
 func (o ImportOptions) WantDevice(d Device) bool {
 	if o.RequireLoginAuthorized {
-		switch strings.ToLower(d.LoginStatus) {
+		switch strings.ToLower(strings.TrimSpace(d.LoginStatus)) {
+		case "":
+			// device/info include=deviceDetail does not supply login status — do not drop unknowns.
 		case "authorized", "privileged":
 		default:
 			return false
 		}
 	}
-	if o.NetworkGearOnly && !isNetworkGear(d.DeviceType) {
+	if o.NetworkGearOnly && !isSyncDeviceType(d.DeviceType) {
 		return false
 	}
 	return true
 }
 
-func isNetworkGear(deviceType string) bool {
-	switch strings.ToLower(deviceType) {
-	case "switch", "l3switch", "router", "accesspoint", "firewall",
-		"securityappliance", "utm", "loadbalancer", "controller", "hub":
+// isSyncDeviceType matches Auvik deviceType values we import for MSP SSH inventory.
+// Names are compared lowercased (Auvik uses camelCase in the API).
+func isSyncDeviceType(deviceType string) bool {
+	switch strings.ToLower(strings.TrimSpace(deviceType)) {
+	// L2/L3 network fabric
+	case "switch", "l3switch", "router", "accesspoint", "thinaccesspoint",
+		"firewall", "securityappliance", "utm", "loadbalancer", "controller",
+		"hub", "bridge", "modem", "stack", "voipswitch", "packetprocessor",
+		"chassis", "backhaul", "telecommunications":
+		return true
+	// Virtual systems / hosts / guests / BMC
+	case "hypervisor", "virtualmachine", "virtualappliance", "server", "ipmi", "storage":
 		return true
 	default:
 		return false
@@ -110,8 +121,14 @@ type ImportStats struct {
 	Skipped  int
 	NoIP     int
 	Errors   []string
+	Notes    []string
 }
 
 func (s ImportStats) Summary() string {
 	return fmt.Sprintf("imported %d, skipped %d, no IP %d", s.Imported, s.Skipped, s.NoIP)
+}
+
+// ErrorCount is the number of hard failures (not informational notes).
+func (s ImportStats) ErrorCount() int {
+	return len(s.Errors)
 }

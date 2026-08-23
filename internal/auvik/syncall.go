@@ -10,11 +10,11 @@ import (
 
 // SyncAllOptions configures a full-account sync pass.
 type SyncAllOptions struct {
-	Client           *Client
-	AppHome          string
-	Tree             *sessions.Tree
-	ImportDefaults   func() ImportOptions
-	ResolveCustomer  func(tenant Tenant) string
+	Client            *Client
+	AppHome           string
+	Tree              *sessions.Tree
+	ImportDefaults    func() ImportOptions
+	ResolveCustomer   func(tenant Tenant) string
 	MoveToAuvikFolder bool
 	UseTunnelDefault  bool
 	PruneStale        bool
@@ -22,12 +22,13 @@ type SyncAllOptions struct {
 
 // SyncAllAggregate summarizes every tenant in one pass.
 type SyncAllAggregate struct {
-	Tenants   int
-	Changed   bool
-	Stale     int
-	Pruned    int
-	Summary   string
-	Errors    []string
+	Tenants int
+	Changed bool
+	Stale   int
+	Pruned  int
+	Skipped int // tenants skipped (permission deny list)
+	Summary string
+	Errors  []string
 }
 
 // SyncAllTenants syncs every Auvik tenant into the session tree.
@@ -45,12 +46,32 @@ func SyncAllTenants(ctx context.Context, opts SyncAllOptions) (SyncAllAggregate,
 	if err != nil {
 		return SyncAllAggregate{}, err
 	}
+	var skipMap TenantMap
+	if home := strings.TrimSpace(opts.AppHome); home != "" {
+		if m, err := LoadTenantMap(home); err == nil {
+			skipMap = m
+		}
+	}
 	agg := SyncAllAggregate{Tenants: len(tenants)}
 	var parts []string
 	imp := opts.ImportDefaults()
 	for _, tenant := range tenants {
+		if skipMap.ShouldSkipSync(tenant.ID) {
+			agg.Skipped++
+			continue
+		}
 		devs, err := opts.Client.ListDevices(ctx, []string{tenant.ID}, 300)
 		if err != nil {
+			if IsPermissionDenied(err) {
+				skipMap.MarkSkipSync(tenant.ID, err.Error())
+				if home := strings.TrimSpace(opts.AppHome); home != "" {
+					_ = SaveTenantMap(home, skipMap)
+				}
+				agg.Skipped++
+				// Log once via summary note — not every 5 minutes as a hard error.
+				parts = append(parts, fmt.Sprintf("%s: skipped (no API permission — will not retry)", tenant.Name))
+				continue
+			}
 			parts = append(parts, tenant.Name+": "+err.Error())
 			agg.Errors = append(agg.Errors, tenant.Name+": "+err.Error())
 			continue
@@ -75,6 +96,12 @@ func SyncAllTenants(ctx context.Context, opts SyncAllOptions) (SyncAllAggregate,
 			parts = append(parts, msg)
 			agg.Errors = append(agg.Errors, msg)
 		}
+		if strings.TrimSpace(opts.AppHome) != "" {
+			if m, err := LoadTenantMap(opts.AppHome); err == nil {
+				m.SetDomain(tenant.ID, tenant.Name)
+				_ = SaveTenantMap(opts.AppHome, m)
+			}
+		}
 		if opts.PruneStale {
 			stale := CollectStale(*opts.Tree, customer, sessions.JoinPath(sessions.DefaultCustomersRoot, customer, ImportFolder), DeviceIDSet(devs))
 			agg.Stale += len(stale)
@@ -89,6 +116,9 @@ func SyncAllTenants(ctx context.Context, opts SyncAllOptions) (SyncAllAggregate,
 				}
 			}
 		}
+	}
+	if agg.Skipped > 0 {
+		parts = append(parts, fmt.Sprintf("(%d tenant(s) skipped — no API permission)", agg.Skipped))
 	}
 	if len(parts) == 0 {
 		agg.Summary = fmt.Sprintf("no changes across %d client(s)", agg.Tenants)

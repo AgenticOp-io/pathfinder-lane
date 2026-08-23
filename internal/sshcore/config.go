@@ -75,6 +75,12 @@ type Config struct {
 	HostKeyPrompt  HostKeyPromptFunc
 	AuthPrompt     AuthPromptFunc
 
+	// HostKeyAlias, when set, is the hostname used for known_hosts lookup and
+	// persistence instead of the dial address. Use when SSH points at a local
+	// forward (127.0.0.1:ephemeral) but the device identity is the real host.
+	// Form: "host" or "host:port" (same as crypto/ssh HostKeyCallback).
+	HostKeyAlias string
+
 	// LegacyAlgorithms appends the legacy KEX/cipher/MAC/host-key tail
 	// (group1-sha1, CBC modes, hmac-sha1/md5, ssh-rsa/ssh-dss) after the
 	// modern set. Required for old routers/switches; off by default.

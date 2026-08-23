@@ -30,7 +30,7 @@ func newTileCell(s *Shell, inst *Instance) *tileCell {
 	tc.setActive(false)
 
 	inner := container.NewStack(tc.border, inst.root)
-	tc.header = newTileHeader(inst.Title(), func() { s.activateTile(inst) })
+	tc.header = newTileHeader(terminalTabTitle(inst, true), func() { s.activateTile(inst) })
 	tc.root = container.NewBorder(tc.header, nil, nil, nil, inner)
 	return tc
 }

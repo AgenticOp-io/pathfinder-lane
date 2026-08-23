@@ -279,9 +279,12 @@ func (f *SettingsForm) build() {
 		container.NewTabItem("Terminal", f.terminalTab()),
 		container.NewTabItem("Sessions", f.sessionsTab()),
 		container.NewTabItem("Tools", f.opsTab()),
-		container.NewTabItem("Paths", f.pathsTab()),
-		container.NewTabItem("File", f.fileTab()),
 	)
+	if f.mspPanel != nil {
+		f.tabs.Append(container.NewTabItem("Integrations", f.integrationsTab()))
+	}
+	f.tabs.Append(container.NewTabItem("Paths", f.pathsTab()))
+	f.tabs.Append(container.NewTabItem("File", f.fileTab()))
 
 	f.content = container.NewBorder(nil, f.footer(), nil, nil, f.tabs)
 }
@@ -372,7 +375,7 @@ func (f *SettingsForm) sessionsTab() fyne.CanvasObject {
 }
 
 func (f *SettingsForm) opsTab() fyne.CanvasObject {
-	rows := []fyne.CanvasObject{
+	return container.NewVScroll(container.NewVBox(
 		widget.NewLabelWithStyle("Change control", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel("Read-only blocks typing and Send/macros (anti-idle still runs).\n"+
 			"A change window limits when sends are allowed (overnight OK, e.g. 22:00–06:00)."),
@@ -389,18 +392,24 @@ func (f *SettingsForm) opsTab() fyne.CanvasObject {
 		form(row("Cursor API key", f.cursorKey)),
 		widget.NewLabel("Prefer CURSOR_API_KEY in the environment. This field is an optional\n"+
 			"local override. Create a key at cursor.com/dashboard → API Keys."),
+		widget.NewSeparator(),
+		widget.NewLabel("Auvik, PSA, RMM, and documentation vault keys are on the Integrations tab."),
+	))
+}
+
+func (f *SettingsForm) integrationsTab() fyne.CanvasObject {
+	if f.mspPanel == nil {
+		return widget.NewLabel("MSP integrations are not enabled for this install.")
 	}
-	if f.mspPanel != nil {
-		rows = append(rows, widget.NewSeparator(), f.mspPanel.content())
-	}
-	return container.NewVScroll(container.NewVBox(rows...))
+	return container.NewVScroll(f.mspPanel.content())
 }
 
 func (f *SettingsForm) fileTab() fyne.CanvasObject {
 	opts := f.opts
 	rows := []fyne.CanvasObject{
 		widget.NewLabelWithStyle("Vault", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Credentials are stored in an encrypted vault file (AES-256-GCM).\n"+
+		widget.NewLabel("Credentials are stored in an encrypted local vault (AES-256-GCM).\n"+
+			"Standalone mode: add username/password here — IT Glue, Hudu, and Passportal are optional imports.\n"+
 			"On startup Pathfinder unlocks from the OS keyring when you chose Remember."),
 	}
 	if opts.OnManageVault != nil {

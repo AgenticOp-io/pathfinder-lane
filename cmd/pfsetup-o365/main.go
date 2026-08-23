@@ -1,4 +1,4 @@
-// pfsetup-o365 — Microsoft 365 organization master setup (separate from main installer).
+﻿// pfsetup-o365 â€” Microsoft 365 organization master setup (separate from main installer).
 package main
 
 import (
@@ -17,7 +17,7 @@ func main() {
 	if icon := ui.AppIcon(); icon != nil {
 		a.SetIcon(icon)
 	}
-	w := a.NewWindow("Microsoft 365 — full MSP setup")
+	w := a.NewWindow("Microsoft 365 â€” MSP setup")
 	w.Resize(fyne.NewSize(720, 580))
 	w.CenterOnScreen()
 
@@ -30,3 +30,4 @@ func main() {
 	})
 	w.ShowAndRun()
 }
+

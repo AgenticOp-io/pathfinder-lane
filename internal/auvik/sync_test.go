@@ -76,14 +76,30 @@ func TestSyncTenantTreeCreatesAndUpdatesIP(t *testing.T) {
 
 func TestShouldTryTunnel(t *testing.T) {
 	n := sessions.Node{AuvikDomain: "nanook", Host: "10.0.0.1", AuvikUseTunnel: true}
-	if !ShouldTryTunnel(n, errReach(), true) {
+	if !ShouldTryTunnel(n, errReach(), true, "") {
 		t.Fatal("expected tunnel try")
 	}
-	if ShouldTryTunnel(n, nil, true) {
+	if ShouldTryTunnel(n, nil, true, "") {
 		t.Fatal("nil err")
 	}
 	n.AuvikDomain = ""
-	if ShouldTryTunnel(n, errReach(), true) {
+	if ShouldTryTunnel(n, errReach(), true, "") {
+		t.Fatal("no domain")
+	}
+}
+
+func TestShouldUseTunnelFirst(t *testing.T) {
+	n := sessions.Node{AuvikDomain: "acme", Host: "10.0.0.1", IntegrationSource: "auvik"}
+	if !ShouldUseTunnelFirst(n, "") {
+		t.Fatal("want tunnel first for auvik session")
+	}
+	// Domain alone (e.g. inherited from customer) is enough — no Auvik inventory row required.
+	n = sessions.Node{AuvikDomain: "acme", Host: "10.1.10.11"}
+	if !ShouldUseTunnelFirst(n, "") {
+		t.Fatal("want tunnel first when domain is set on local session")
+	}
+	n.AuvikDomain = ""
+	if ShouldUseTunnelFirst(n, "") {
 		t.Fatal("no domain")
 	}
 }

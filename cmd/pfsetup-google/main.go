@@ -1,4 +1,4 @@
-// pfsetup-google — Google Workspace organization master setup (separate from main installer).
+﻿// pfsetup-google â€” Google Workspace organization master setup (separate from main installer).
 package main
 
 import (
@@ -17,7 +17,7 @@ func main() {
 	if icon := ui.AppIcon(); icon != nil {
 		a.SetIcon(icon)
 	}
-	w := a.NewWindow("Google Workspace — full MSP setup")
+	w := a.NewWindow("Google Workspace â€” MSP setup")
 	w.Resize(fyne.NewSize(720, 580))
 	w.CenterOnScreen()
 
@@ -30,3 +30,4 @@ func main() {
 	})
 	w.ShowAndRun()
 }
+

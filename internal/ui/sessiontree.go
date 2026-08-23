@@ -131,9 +131,16 @@ func (t *SessionTree) Tree() sessions.Tree { return t.tree }
 // SetTree replaces the inventory and redraws. It does NOT fire OnChanged —
 // this is the host telling the widget what is true, not the widget telling the
 // host something changed.
+//
+// Safe from any goroutine: data is swapped here, and the Fyne redraw is
+// marshalled onto the UI thread. Auvik background sync used to call this off
+// the UI thread and flood "Error in Fyne call thread" logs on every row.
 func (t *SessionTree) SetTree(tr sessions.Tree) {
+	if t == nil {
+		return
+	}
 	t.tree = tr
-	t.refresh()
+	fyne.Do(func() { t.refresh() })
 }
 
 // Selected is the highlighted row, if it is a session.
@@ -251,11 +258,12 @@ func (t *SessionTree) build() {
 
 // RefreshView redraws the inventory from the current tree and filter.
 // Call after theme/icon settings change so branch expand glyphs update.
+// Safe from any goroutine (marshals onto the Fyne UI thread).
 func (t *SessionTree) RefreshView() {
 	if t == nil {
 		return
 	}
-	t.refresh()
+	fyne.Do(func() { t.refresh() })
 }
 
 // scheduleFilterRefresh rebuilds the view after typing pauses. Fyne's Tree

@@ -1,4 +1,4 @@
-package appinstall
+﻿package appinstall
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 // BundledTools are optional CLI/GUI companions copied beside pathfinder.exe.
 var BundledTools = []string{
 	"pathfinder", "pfseed", "pfinstall", "pfengineer-install",
-	"pfsetup-o365", "pfsetup-google", "pfsetup-apis",
+	"pfsetup-msp", "pfsetup-o365", "pfsetup-google", "pfsetup-apis",
 }
 
 func exeName(base string) string {
@@ -52,3 +52,4 @@ func CopyToolBundle(srcDir, destDir string) (bool, error) {
 func isPathfinderExe(path string) bool {
 	return strings.EqualFold(filepath.Base(path), exeName("pathfinder"))
 }
+

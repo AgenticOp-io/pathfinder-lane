@@ -60,7 +60,7 @@ func cmdSyncAuvik(args []string) error {
 			}
 			return auvik.ImportOptions{
 				NetworkGearOnly:        true,
-				RequireLoginAuthorized: true,
+				RequireLoginAuthorized: false, // include=deviceDetail has no login status
 				DefaultUsername:        user,
 				DefaultCredential:      cred,
 			}

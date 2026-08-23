@@ -41,7 +41,7 @@ func NewAccessSetupForm(w fyne.Window, preset idp.Provider) *AccessSetupForm {
 	}
 
 	f.tenant = widget.NewEntry()
-	f.tenant.SetPlaceHolder("Directory (tenant) ID — from Azure app Overview")
+	f.tenant.SetPlaceHolder("Directory (tenant) ID â€” from Azure app Overview")
 	f.client = widget.NewEntry()
 	f.client.SetPlaceHolder("Client ID")
 	f.domain = widget.NewEntry()
@@ -62,9 +62,9 @@ func NewAccessSetupForm(w fyne.Window, preset idp.Provider) *AccessSetupForm {
 
 	entraBox := container.NewVBox(
 		widget.NewLabel("One-time setup in Azure (about 5 minutes):\n"+
-			"1. New registration → name PathfinderSSH, single tenant\n"+
+			"1. New registration â†’ name PathfinderSSH, single tenant\n"+
 			"2. Redirect URI (Web): http://127.0.0.1:53682/callback\n"+
-			"3. Authentication → Allow public client flows: Yes\n"+
+			"3. Authentication â†’ Allow public client flows: Yes\n"+
 			"4. Copy Tenant ID and Client ID below"),
 		container.NewHBox(msHelp, openEntra),
 		widget.NewForm(
@@ -76,7 +76,7 @@ func NewAccessSetupForm(w fyne.Window, preset idp.Provider) *AccessSetupForm {
 	googleBox := container.NewVBox(
 		widget.NewLabel("One-time setup in Google Cloud:\n"+
 			"1. Create project (or pick one)\n"+
-			"2. Credentials → Create OAuth client ID → Desktop (or Web with redirect\n"+
+			"2. Credentials â†’ Create OAuth client ID â†’ Desktop (or Web with redirect\n"+
 			"   http://127.0.0.1:53682/callback)\n"+
 			"3. Copy Client ID below"),
 		container.NewHBox(googleHelp, openGoogle),
@@ -86,7 +86,7 @@ func NewAccessSetupForm(w fyne.Window, preset idp.Provider) *AccessSetupForm {
 		),
 	)
 	soloNote := widget.NewLabel("No Microsoft or Google login. Your Windows user is enough.\n"+
-		"Configure Auvik, PSA, vault, and Cursor AI in Settings → Tools or pfsetup-apis.exe after install.")
+		"Configure Auvik, PSA, vault, and Cursor AI in Settings → Tools after install.")
 
 	entraBox.Hide()
 	googleBox.Hide()
@@ -109,7 +109,7 @@ func NewAccessSetupForm(w fyne.Window, preset idp.Provider) *AccessSetupForm {
 	refresh()
 
 	f.content = container.NewVBox(
-		widget.NewLabel("Pick one. Solo is easiest — no cloud app registration."),
+		widget.NewLabel("Pick one. Solo is easiest â€” no cloud app registration."),
 		widget.NewForm(widget.NewFormItem("Sign-in", f.ProviderSel)),
 		soloNote,
 		entraBox,
@@ -201,7 +201,7 @@ func RunEnrollment(w fyne.Window, enroll mspauth.Enrollment, enrollFn EnrollHand
 		return
 	}
 	progress := dialog.NewCustomWithoutButtons("Signing in",
-		widget.NewLabel("Complete sign-in in your browser, then return here…"), w)
+		widget.NewLabel("Complete sign-in in your browser, then return here..."), w)
 	progress.Show()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -219,3 +219,4 @@ func RunEnrollment(w fyne.Window, enroll mspauth.Enrollment, enrollFn EnrollHand
 		})
 	}()
 }
+

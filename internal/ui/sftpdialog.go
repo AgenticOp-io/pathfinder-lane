@@ -4,7 +4,10 @@
 package ui
 
 import (
+	"errors"
+	"sync/atomic"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -28,18 +31,68 @@ type SFTPView struct {
 	win     fyne.Window
 }
 
-// NewSFTPView opens the SFTP subsystem and builds the browser UI.
-func NewSFTPView(w fyne.Window, sshClient *ssh.Client) (*SFTPView, error) {
-	if w == nil || sshClient == nil {
-		return nil, fmt.Errorf("SFTP requires a window and SSH client")
+// DialSFTP opens the SFTP subsystem on an existing SSH client.
+// Safe to call off the UI thread (network only; no widgets).
+func DialSFTP(sshClient *ssh.Client) (*sftpclient.Client, error) {
+	if sshClient == nil {
+		return nil, fmt.Errorf("SFTP requires an SSH client")
 	}
-	cli, err := sftpclient.Open(sshClient)
+	return sftpclient.Open(sshClient)
+}
+
+// NewSFTPViewFromClient builds the browser UI for an already-open SFTP client.
+// Call on the UI thread.
+func NewSFTPViewFromClient(w fyne.Window, cli *sftpclient.Client) *SFTPView {
+	return NewSFTPViewFromSeed(w, cli, SFTPSeed{})
+}
+
+// SFTPSeed is a prefetched directory listing for opening the browser without
+// touching the network on the UI thread.
+type SFTPSeed struct {
+	Dir  string
+	Ents []sftpclient.Entry
+	Err  error
+}
+
+// PrefetchSFTP lists "." off the UI thread. It never calls Getwd/RealPath.
+func PrefetchSFTP(cli *sftpclient.Client) SFTPSeed {
+	if cli == nil {
+		return SFTPSeed{Dir: ".", Err: fmt.Errorf("SFTP client is nil")}
+	}
+	ents, err := cli.List(".")
+	return SFTPSeed{Dir: ".", Ents: ents, Err: err}
+}
+
+// NewSFTPViewFromSeed builds the browser from a PrefetchSFTP result.
+func NewSFTPViewFromSeed(w fyne.Window, cli *sftpclient.Client, seed SFTPSeed) *SFTPView {
+	dir := seed.Dir
+	if dir == "" {
+		dir = "."
+	}
+	return NewSFTPViewSeeded(w, cli, dir, seed.Ents, seed.Err)
+}
+
+// NewSFTPViewSeeded builds the browser with a prefetched listing so the UI
+// thread never waits on SFTP after the tab opens.
+func NewSFTPViewSeeded(w fyne.Window, cli *sftpclient.Client, dir string, ents []sftpclient.Entry, err error) *SFTPView {
+	v := &SFTPView{cli: cli, win: w}
+	v.content = buildSFTPBody(w, cli, dir, ents, err)
+	return v
+}
+
+// NewSFTPView opens the SFTP subsystem and builds the browser UI.
+// Prefer DialSFTP + NewSFTPViewFromClient from the host so the handshake
+// does not freeze the Fyne thread.
+func NewSFTPView(w fyne.Window, sshClient *ssh.Client) (*SFTPView, error) {
+	cli, err := DialSFTP(sshClient)
 	if err != nil {
 		return nil, err
 	}
-	v := &SFTPView{cli: cli, win: w}
-	v.content = buildSFTPBody(w, cli)
-	return v, nil
+	if w == nil {
+		_ = cli.Close()
+		return nil, fmt.Errorf("SFTP requires a window")
+	}
+	return NewSFTPViewFromClient(w, cli), nil
 }
 
 func (v *SFTPView) Content() fyne.CanvasObject { return v.content }
@@ -61,7 +114,7 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 		dialog.ShowError(fmt.Errorf("SFTP: %w", err), w)
 		return
 	}
-	body := buildSFTPBody(w, cli)
+	body := buildSFTPBody(w, cli, "", nil, nil)
 	if title == "" {
 		title = "File Transfer (SFTP)"
 	}
@@ -71,7 +124,7 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 	d.Show()
 }
 
-func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
+func buildSFTPBody(w fyne.Window, cli *sftpclient.Client, initDir string, initEnts []sftpclient.Entry, initErr error) fyne.CanvasObject {
 	remoteDir := "."
 	var entries []sftpclient.Entry
 	selected := -1
@@ -112,13 +165,11 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
 		},
 	)
 
-	var refresh func()
-	refresh = func() {
-		dir := strings.TrimSpace(pathEntry.Text)
-		if dir == "" {
-			dir = "."
+	var refreshGen uint64
+	applyListing := func(dir string, ents []sftpclient.Entry, err error, gen uint64) {
+		if gen != refreshGen {
+			return // superseded by a newer refresh
 		}
-		ents, err := cli.List(dir)
 		if err != nil {
 			status.SetText(err.Error())
 			return
@@ -138,6 +189,21 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
 		status.SetText(fmt.Sprintf("%d items in %s", len(ents), dir))
 	}
 
+	var refresh func()
+	refresh = func() {
+		dir := strings.TrimSpace(pathEntry.Text)
+		if dir == "" {
+			dir = "."
+		}
+		refreshGen++
+		gen := refreshGen
+		status.SetText("Loading...")
+		go func(dir string, gen uint64) {
+			ents, err := cli.List(dir)
+			fyne.Do(func() { applyListing(dir, ents, err, gen) })
+		}(dir, gen)
+	}
+
 	list.OnSelected = func(i widget.ListItemID) { selected = int(i) }
 	list.OnUnselected = func(widget.ListItemID) { selected = -1 }
 
@@ -154,16 +220,33 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
 		refresh()
 	}
 
-	homeDir := "/"
-	if wd, err := cli.Getwd(); err == nil && strings.TrimSpace(wd) != "" {
-		homeDir = wd
-	}
-	if rp, err := cli.RealPath("~"); err == nil && strings.TrimSpace(rp) != "" {
-		homeDir = rp
-	}
+	homeDir := "."
 	goHome := func() {
 		pathEntry.SetText(homeDir)
 		refresh()
+	}
+	// Never call Getwd/RealPath on open. pkg/sftp Getwd is RealPath("."), and
+	// RealPath hangs on many network-OS SSH daemons — that wedges the shared
+	// SSH mux (terminal + SFTP) and freezes the app after the tab appears.
+	// List(".") is the SFTP session cwd and is what those boxes expect.
+	if initDir != "" {
+		homeDir = initDir
+		pathEntry.SetText(initDir)
+	}
+	if initErr != nil {
+		status.SetText(initErr.Error())
+	} else if initEnts != nil {
+		refreshGen++
+		applyListing(homeDir, initEnts, nil, refreshGen)
+	} else {
+		status.SetText("Loading...")
+		go func() {
+			ents, err := cli.List(".")
+			fyne.Do(func() {
+				refreshGen++
+				applyListing(".", ents, err, refreshGen)
+			})
+		}()
 	}
 
 	pathEntry.OnSubmitted = func(string) { refresh() }
@@ -189,18 +272,13 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
 			}
 			local := uc.URI().Path()
 			_ = uc.Close()
-			status.SetText("Downloading…")
-			go func() {
-				err := cli.Download(e.Path, local)
-				fyne.Do(func() {
-					if err != nil {
-						status.SetText(err.Error())
-						dialog.ShowError(err, w)
-						return
-					}
-					status.SetText("Downloaded " + filepath.Base(local))
-				})
-			}()
+			runSFTPTransferWindow(w, "Download", e.Name, e.Size, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
+				err := cli.DownloadProgress(e.Path, local, report, ctrl)
+				if errors.Is(err, sftpclient.ErrStopped) {
+					_ = os.Remove(local) // drop partial download
+				}
+				return err
+			}, nil)
 		}, w)
 		save.SetFileName(e.Name)
 		save.Resize(fyne.NewSize(820, 600))
@@ -234,19 +312,13 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
 			_ = uc.Close()
 			base := filepath.Base(local)
 			remote := sftpclient.Join(remoteDir, base)
-			status.SetText("Uploading…")
-			go func() {
-				err := cli.Upload(local, remote)
-				fyne.Do(func() {
-					if err != nil {
-						status.SetText(err.Error())
-						dialog.ShowError(err, w)
-						return
-					}
-					status.SetText("Uploaded " + base)
-					refresh()
-				})
-			}()
+			var total int64
+			if st, err := os.Stat(local); err == nil {
+				total = st.Size()
+			}
+			runSFTPTransferWindow(w, "Upload", base, total, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
+				return cli.UploadProgress(local, remote, report, ctrl)
+			}, refresh)
 		}, w)
 		open.Resize(fyne.NewSize(820, 600))
 		if home, err := osUserHome(); err == nil {
@@ -271,11 +343,18 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
 				return
 			}
 			remote := sftpclient.Join(remoteDir, n)
-			if err := cli.Mkdir(remote); err != nil {
-				dialog.ShowError(err, w)
-				return
-			}
-			refresh()
+			status.SetText("Creating folder...")
+			go func() {
+				err := cli.Mkdir(remote)
+				fyne.Do(func() {
+					if err != nil {
+						status.SetText(err.Error())
+						dialog.ShowError(err, w)
+						return
+					}
+					refresh()
+				})
+			}()
 		}, w)
 	}
 
@@ -289,11 +368,18 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
 			if !ok {
 				return
 			}
-			if err := cli.Remove(e.Path); err != nil {
-				dialog.ShowError(err, w)
-				return
-			}
-			refresh()
+			status.SetText("Deleting...")
+			go func(path string) {
+				err := cli.Remove(path)
+				fyne.Do(func() {
+					if err != nil {
+						status.SetText(err.Error())
+						dialog.ShowError(err, w)
+						return
+					}
+					refresh()
+				})
+			}(e.Path)
 		}, w)
 	}
 
@@ -321,9 +407,167 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client) fyne.CanvasObject {
 		nil, nil,
 		container.NewBorder(toolbar, nil, nil, nil, list),
 	)
-	refresh()
+	status.SetText("Loading...")
 	return body
 }
+
+
+// runSFTPTransferWindow opens a detached transfer window with pause / resume / stop.
+func runSFTPTransferWindow(parent fyne.Window, title, fileName string, total int64, status *widget.Label, work func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error, onOK func()) {
+	ctrl := sftpclient.NewTransferControl()
+	app := fyne.CurrentApp()
+	if app == nil {
+		dialog.ShowError(fmt.Errorf("no application for transfer window"), parent)
+		return
+	}
+	win := app.NewWindow(title + " — " + fileName)
+	win.Resize(fyne.NewSize(480, 220))
+
+	bar := widget.NewProgressBar()
+	if total > 0 {
+		bar.Max = float64(total)
+	} else {
+		bar.Max = 1
+	}
+	detail := widget.NewLabel("Starting…")
+	detail.Wrapping = fyne.TextWrapWord
+	state := widget.NewLabel("Transferring")
+	name := widget.NewLabel(fileName)
+	name.TextStyle = fyne.TextStyle{Bold: true}
+
+	pauseBtn := widget.NewButton("Pause", nil)
+	resumeBtn := widget.NewButton("Resume", nil)
+	stopBtn := widget.NewButton("Stop", nil)
+	resumeBtn.Disable()
+
+	setRunning := func() {
+		state.SetText("Transferring")
+		pauseBtn.Enable()
+		resumeBtn.Disable()
+		stopBtn.Enable()
+	}
+	setPaused := func() {
+		state.SetText("Paused")
+		pauseBtn.Disable()
+		resumeBtn.Enable()
+		stopBtn.Enable()
+	}
+	setStopping := func() {
+		state.SetText("Stopping…")
+		pauseBtn.Disable()
+		resumeBtn.Disable()
+		stopBtn.Disable()
+	}
+
+	pauseBtn.OnTapped = func() {
+		ctrl.Pause()
+		setPaused()
+	}
+	resumeBtn.OnTapped = func() {
+		ctrl.Resume()
+		setRunning()
+	}
+	stopBtn.OnTapped = func() {
+		ctrl.Stop()
+		setStopping()
+	}
+
+	finished := false
+	closeWin := func() {
+		if finished {
+			return
+		}
+		finished = true
+		win.SetCloseIntercept(nil)
+		win.Close()
+	}
+
+	win.SetCloseIntercept(func() {
+		// Closing the window stops the transfer.
+		ctrl.Stop()
+		setStopping()
+	})
+
+	buttons := container.NewHBox(pauseBtn, resumeBtn, stopBtn)
+	win.SetContent(container.NewPadded(container.NewVBox(
+		name,
+		state,
+		bar,
+		detail,
+		buttons,
+	)))
+	win.Show()
+	status.SetText(title + "…")
+
+	// Coalesce progress onto the UI thread: at most one fyne.Do in flight.
+	// Unbounded fyne.Do from the copy goroutine made the app look frozen.
+	var progDone, progTotal atomic.Int64
+	var progSched atomic.Bool
+	scheduleProgress := func(done, tot int64) {
+		progDone.Store(done)
+		progTotal.Store(tot)
+		if !progSched.CompareAndSwap(false, true) {
+			return
+		}
+		fyne.Do(func() {
+			for {
+				d := progDone.Load()
+				tot := progTotal.Load()
+				progSched.Store(false)
+				if tot > 0 {
+					bar.Max = float64(tot)
+					bar.SetValue(float64(d))
+					detail.SetText(fmt.Sprintf("%s / %s", formatSize(d), formatSize(tot)))
+				} else {
+					detail.SetText(formatSize(d) + " transferred")
+				}
+				// If a newer sample arrived while we painted, schedule once more.
+				if progDone.Load() == d {
+					return
+				}
+				if !progSched.CompareAndSwap(false, true) {
+					return
+				}
+			}
+		})
+	}
+
+	go func() {
+		err := work(scheduleProgress, ctrl)
+		fyne.Do(func() {
+			pauseBtn.Disable()
+			resumeBtn.Disable()
+			stopBtn.Disable()
+			if errors.Is(err, sftpclient.ErrStopped) {
+				state.SetText("Stopped")
+				status.SetText(title + " stopped: " + fileName)
+				detail.SetText("Transfer stopped")
+				closeWin()
+				return
+			}
+			if err != nil {
+				state.SetText("Failed")
+				status.SetText(err.Error())
+				dialog.ShowError(err, parent)
+				closeWin()
+				return
+			}
+			if total > 0 {
+				bar.SetValue(float64(total))
+			} else {
+				bar.SetValue(1)
+			}
+			state.SetText("Complete")
+			detail.SetText("Finished")
+			status.SetText(title + " complete: " + fileName)
+			if onOK != nil {
+				onOK()
+			}
+			closeWin()
+		})
+	}()
+}
+
 
 func formatSize(n int64) string {
 	const (

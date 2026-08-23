@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -51,7 +52,11 @@ func buildHostKeyCallback(cfg *Config) (ssh.HostKeyCallback, error) {
 	}
 
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		err := base(hostname, remote, key)
+		checkHost := hostname
+		if alias := strings.TrimSpace(cfg.HostKeyAlias); alias != "" {
+			checkHost = alias
+		}
+		err := base(checkHost, remote, key)
 		if err == nil {
 			return nil // pinned and matched
 		}
@@ -67,26 +72,26 @@ func buildHostKeyCallback(cfg *Config) (ssh.HostKeyCallback, error) {
 			return fmt.Errorf(
 				"host key verification failed for %s: offered key (%s %s) does not match "+
 					"the pinned key in %s; if this change is expected, remove the old entry "+
-					"and reconnect", hostname, key.Type(), ssh.FingerprintSHA256(key), path)
+					"and reconnect", checkHost, key.Type(), ssh.FingerprintSHA256(key), path)
 		}
 
 		// Unknown host — first contact.
 		if cfg.HostKeys != HostKeyTOFU || cfg.HostKeyPrompt == nil {
 			return fmt.Errorf("unknown host key for %s (%s %s); not in %s",
-				hostname, key.Type(), ssh.FingerprintSHA256(key), path)
+				checkHost, key.Type(), ssh.FingerprintSHA256(key), path)
 		}
 
-		accept, perr := cfg.HostKeyPrompt(hostname, remote, key)
+		accept, perr := cfg.HostKeyPrompt(checkHost, remote, key)
 		if perr != nil {
 			return perr
 		}
 		if !accept {
-			return fmt.Errorf("host key for %s rejected", hostname)
+			return fmt.Errorf("host key for %s rejected", checkHost)
 		}
-		if werr := appendKnownHost(path, hostname, key); werr != nil {
+		if werr := appendKnownHost(path, checkHost, key); werr != nil {
 			// Trusted for THIS session; warn that it won't be remembered.
 			fmt.Fprintf(os.Stderr, "warning: accepted host key for %s but could not persist it: %v\n",
-				hostname, werr)
+				checkHost, werr)
 		}
 		return nil
 	}, nil

@@ -50,6 +50,7 @@ func (h *host) mspIntegrationActions() *ui.MSPIntegrationActions {
 	return &ui.MSPIntegrationActions{
 		OnImportAuvik:      h.importFromAuvik,
 		OnSyncAuvik:        h.syncAuvikNow,
+		OnOpenSyncLog:      func() { ui.ShowSyncLogDialog(h.win) },
 		OnImportITGlue:     h.importFromITGlue,
 		OnImportHudu:       h.importFromHudu,
 		OnImportPassportal: h.importFromPassportal,

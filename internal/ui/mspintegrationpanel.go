@@ -1,4 +1,4 @@
-package ui
+﻿package ui
 
 import (
 	"fyne.io/fyne/v2"
@@ -10,6 +10,7 @@ import (
 type MSPIntegrationActions struct {
 	OnImportAuvik      func()
 	OnSyncAuvik        func()
+	OnOpenSyncLog      func()
 	OnImportITGlue     func()
 	OnImportHudu       func()
 	OnImportPassportal func()
@@ -98,19 +99,22 @@ type MSPIntegrationPanel struct {
 func newMSPIntegrationPanel() *MSPIntegrationPanel {
 	p := &MSPIntegrationPanel{}
 	p.defUser = entry("Default SSH username for synced devices")
+	p.defUser.SetPlaceHolder("e.g. admin — applied to imported sessions")
 	p.defCred = entry("Default vault credential name")
+	p.defCred.SetPlaceHolder("Local vault entry name (Settings → File → Manage credentials)")
 
 	p.auvikUser = entry("Auvik user email")
 	p.auvikKey = entry("API key")
 	p.auvikKey.Password = true
 	p.auvikBase = entry("https://auvikapi.us1.my.auvik.com")
+	p.auvikBase.SetPlaceHolder("https://auvikapi.<region>.my.auvik.com (not the dashboard URL)")
 	p.auvikSync = widget.NewCheck("Periodic Auvik inventory sync (all clients)", nil)
 	p.auvikInterval = entry("60")
 	p.auvikTunnel = entry("Path to AuvikTunnel.exe (optional)")
 	p.auvikAutoTun = widget.NewCheck("Try AuvikTunnel when direct SSH fails", nil)
 	p.auvikPrune = widget.NewCheck("Prune stale Auvik sessions on sync", nil)
 
-	p.itglueKey = entry("ITG.… API key")
+	p.itglueKey = entry("ITG... API key")
 	p.itglueKey.Password = true
 	p.itglueBase = entry("https://api.itglue.com")
 
@@ -309,21 +313,27 @@ func (p *MSPIntegrationPanel) fields(base SettingsFields) SettingsFields {
 
 func (p *MSPIntegrationPanel) content() fyne.CanvasObject {
 	return container.NewVBox(
-		widget.NewLabelWithStyle("MSP integration stack", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Three layers work together: PSA customers → inventory IPs → vault credentials.\n"+
-			"Use File tab actions to sync after saving credentials here or in pfsetup-apis."),
+		widget.NewLabelWithStyle("Local credentials (standalone)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("Standalone installs do not require IT Glue, Hudu, or Passportal.\n"+
+			"Store username/password in the encrypted local vault (Settings → File → Manage credentials),\n"+
+			"or type them on each session when you connect."),
 		widget.NewSeparator(),
-		widget.NewLabelWithStyle("Shared inventory defaults", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Default SSH for imported devices", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("When inventory sync creates sessions (Auvik, CSV, etc.), these defaults apply.\n"+
+			"The vault credential name must match an entry you created locally — not an external doc vault."),
 		form(
 			row("Default SSH user", p.defUser),
 			row("Default vault credential", p.defCred),
 		),
 		widget.NewSeparator(),
+		widget.NewLabelWithStyle("Optional integrations", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("Leave blank any service you do not use. Sync actions run from the File tab after saving."),
+		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Inventory (IPs + new devices)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel("Sync creates SSH sessions under Customers/<client>/<source>/ and updates IPs on re-sync."),
 		widget.NewLabelWithStyle("Auvik", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		form(
-			row("Username", p.auvikUser),
+			row("Username (email)", p.auvikUser),
 			row("API key", p.auvikKey),
 			row("API base URL", p.auvikBase),
 			row("Periodic sync", p.auvikSync),
@@ -332,6 +342,7 @@ func (p *MSPIntegrationPanel) content() fyne.CanvasObject {
 			row("Auto tunnel", p.auvikAutoTun),
 			row("Prune stale on sync", p.auvikPrune),
 		),
+		widget.NewLabel("Region: open Auvik in the browser — if the URL is us2.my.auvik.com, use https://auvikapi.us2.my.auvik.com"),
 		widget.NewLabelWithStyle("Domotz", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		form(row("API key", p.domotzKey), row("Base URL", p.domotzBase)),
 		widget.NewLabelWithStyle("NinjaOne", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -343,8 +354,8 @@ func (p *MSPIntegrationPanel) content() fyne.CanvasObject {
 		widget.NewLabelWithStyle("N-able N-central", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		form(row("JWT", p.ncentralJWT), row("Server URL", p.ncentralServer)),
 		widget.NewSeparator(),
-		widget.NewLabelWithStyle("Credentials (vault)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Import username/password into encrypted vault; link to sessions by host/name."),
+		widget.NewLabelWithStyle("Optional documentation vaults", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("Import passwords into the local encrypted vault. Skip this section if you enter credentials manually or use the local vault only."),
 		widget.NewLabelWithStyle("IT Glue", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		form(row("API key", p.itglueKey), row("Base URL", p.itglueBase)),
 		widget.NewLabelWithStyle("Hudu", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -378,50 +389,54 @@ func mspFileTabRows(actions *MSPIntegrationActions) []fyne.CanvasObject {
 	rows = append(rows,
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("MSP sync", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Inventory adds SSH targets and updates IPs. Credentials fill the vault.\n"+
-			"Customers folders come from PSA sync or file import."),
+		widget.NewLabel("Inventory adds SSH targets and updates IPs.\n"+
+			"Set Auvik API base URL under Settings → Integrations (https://auvikapi.<region>.my.auvik.com).\n"+
+			"Credentials: use local vault (Manage credentials) — IT Glue is optional."),
 	)
 	if actions.OnSyncCustomers != nil {
-		rows = append(rows, widget.NewButton("Import customer list (JSON file)…", actions.OnSyncCustomers))
+		rows = append(rows, widget.NewButton("Import customer list (JSON file)...", actions.OnSyncCustomers))
 	}
 	if actions.OnSyncConnectWise != nil {
-		rows = append(rows, widget.NewButton("Sync customers from ConnectWise…", actions.OnSyncConnectWise))
+		rows = append(rows, widget.NewButton("Sync customers from ConnectWise...", actions.OnSyncConnectWise))
 	}
 	if actions.OnSyncAutotask != nil {
-		rows = append(rows, widget.NewButton("Sync customers from Autotask…", actions.OnSyncAutotask))
+		rows = append(rows, widget.NewButton("Sync customers from Autotask...", actions.OnSyncAutotask))
 	}
 	if actions.OnSyncHalo != nil {
-		rows = append(rows, widget.NewButton("Sync customers from Halo…", actions.OnSyncHalo))
+		rows = append(rows, widget.NewButton("Sync customers from Halo...", actions.OnSyncHalo))
 	}
 	if actions.OnImportAuvik != nil {
-		rows = append(rows, widget.NewButton("Sync devices from Auvik…", actions.OnImportAuvik))
+		rows = append(rows, widget.NewButton("Sync selected Auvik clients...", actions.OnImportAuvik))
 	}
 	if actions.OnSyncAuvik != nil {
-		rows = append(rows, widget.NewButton("Sync all Auvik tenants now…", actions.OnSyncAuvik))
+		rows = append(rows, widget.NewButton("Sync ALL Auvik clients now...", actions.OnSyncAuvik))
+	}
+	if actions.OnOpenSyncLog != nil {
+		rows = append(rows, widget.NewButton("Open MSP sync log / troubleshoot...", actions.OnOpenSyncLog))
 	}
 	if actions.OnImportDomotz != nil {
-		rows = append(rows, widget.NewButton("Sync devices from Domotz…", actions.OnImportDomotz))
+		rows = append(rows, widget.NewButton("Sync devices from Domotz...", actions.OnImportDomotz))
 	}
 	if actions.OnImportNinja != nil {
-		rows = append(rows, widget.NewButton("Sync devices from NinjaOne…", actions.OnImportNinja))
+		rows = append(rows, widget.NewButton("Sync devices from NinjaOne...", actions.OnImportNinja))
 	}
 	if actions.OnImportDatto != nil {
-		rows = append(rows, widget.NewButton("Sync devices from Datto RMM…", actions.OnImportDatto))
+		rows = append(rows, widget.NewButton("Sync devices from Datto RMM...", actions.OnImportDatto))
 	}
 	if actions.OnImportAutomate != nil {
-		rows = append(rows, widget.NewButton("Sync devices from Automate…", actions.OnImportAutomate))
+		rows = append(rows, widget.NewButton("Sync devices from Automate...", actions.OnImportAutomate))
 	}
 	if actions.OnImportNcentral != nil {
-		rows = append(rows, widget.NewButton("Sync devices from N-central…", actions.OnImportNcentral))
+		rows = append(rows, widget.NewButton("Sync devices from N-central...", actions.OnImportNcentral))
 	}
 	if actions.OnImportITGlue != nil {
-		rows = append(rows, widget.NewButton("Import credentials from IT Glue…", actions.OnImportITGlue))
+		rows = append(rows, widget.NewButton("Import credentials from IT Glue...", actions.OnImportITGlue))
 	}
 	if actions.OnImportHudu != nil {
-		rows = append(rows, widget.NewButton("Import credentials from Hudu…", actions.OnImportHudu))
+		rows = append(rows, widget.NewButton("Import credentials from Hudu...", actions.OnImportHudu))
 	}
 	if actions.OnImportPassportal != nil {
-		rows = append(rows, widget.NewButton("Import credentials from Passportal…", actions.OnImportPassportal))
+		rows = append(rows, widget.NewButton("Import credentials from Passportal...", actions.OnImportPassportal))
 	}
 	rows = append(rows,
 		widget.NewSeparator(),
@@ -429,19 +444,20 @@ func mspFileTabRows(actions *MSPIntegrationActions) []fyne.CanvasObject {
 		widget.NewLabel("Document on-call/incident work from the engineer console (augments PagerDuty)."),
 	)
 	if actions.OnBindWorkContext != nil {
-		rows = append(rows, widget.NewButton("Bind active incident…", actions.OnBindWorkContext))
+		rows = append(rows, widget.NewButton("Bind active incident...", actions.OnBindWorkContext))
 	}
 	if actions.OnClearWorkContext != nil {
 		rows = append(rows, widget.NewButton("Clear active incident", actions.OnClearWorkContext))
 	}
 	if actions.OnDocumentWork != nil {
-		rows = append(rows, widget.NewButton("Document work to incident…", actions.OnDocumentWork))
+		rows = append(rows, widget.NewButton("Document work to incident...", actions.OnDocumentWork))
 	}
 	if actions.OnExportHandoff != nil {
-		rows = append(rows, widget.NewButton("Export customer handoff package…", actions.OnExportHandoff))
+		rows = append(rows, widget.NewButton("Export customer handoff package...", actions.OnExportHandoff))
 	}
 	if actions.OnOpenNOCMap != nil {
-		rows = append(rows, widget.NewButton("Open NOC map view…", actions.OnOpenNOCMap))
+		rows = append(rows, widget.NewButton("Open NOC map view...", actions.OnOpenNOCMap))
 	}
 	return rows
 }
+

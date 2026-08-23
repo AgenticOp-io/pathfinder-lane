@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -11,15 +12,15 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/auvik"
 )
 
-// AuvikImportOptions configures the import dialog.
+// AuvikImportOptions configures the multi-client import dialog.
 type AuvikImportOptions struct {
 	Tenants       []auvik.Tenant
 	CustomerNames []string
-	// OnImport runs with selected tenant IDs, customer folder, and import options.
-	OnImport func(tenantIDs []string, customerFolder string, opts auvik.ImportOptions) (auvik.ImportStats, error)
+	// OnImport syncs the selected Auvik clients (each into its own Customers/<name>/Auvik folder).
+	OnImport func(tenants []auvik.Tenant, opts auvik.ImportOptions) (auvik.ImportStats, error)
 }
 
-// ShowAuvikImportDialog picks Auvik client(s) and imports SSH inventory.
+// ShowAuvikImportDialog lets the operator pick one or more Auvik clients (all selected by default).
 func ShowAuvikImportDialog(w fyne.Window, opts AuvikImportOptions) {
 	if w == nil {
 		return
@@ -28,59 +29,64 @@ func ShowAuvikImportDialog(w fyne.Window, opts AuvikImportOptions) {
 		dialog.ShowInformation("Auvik", "No Auvik clients returned for this account.", w)
 		return
 	}
-	labels := make([]string, len(opts.Tenants))
-	labelToID := map[string]string{}
+
+	checks := make([]*widget.Check, len(opts.Tenants))
+	rows := make([]fyne.CanvasObject, 0, len(opts.Tenants))
 	for i, t := range opts.Tenants {
-		labels[i] = t.Name
-		if t.ID != "" {
-			labelToID[t.Name] = t.ID
+		label := strings.TrimSpace(t.Name)
+		if label == "" {
+			label = t.ID
+		}
+		c := widget.NewCheck(label, nil)
+		c.SetChecked(true) // all clients integrated by default
+		checks[i] = c
+		rows = append(rows, c)
+	}
+
+	setAll := func(on bool) {
+		for _, c := range checks {
+			c.SetChecked(on)
 		}
 	}
-	sel := widget.NewSelect(labels, nil)
-	if len(labels) > 0 {
-		sel.SetSelected(labels[0])
-	}
-	picker := NewCustomerFolderPicker(opts.CustomerNames, labels[0])
-	sel.OnChanged = func(label string) {
-		picker.SetSuggested(opts.CustomerNames, label)
-	}
-	netOnly := widget.NewCheck("Network gear only (switch/router/firewall/AP…)", nil)
+	selectAll := widget.NewButton("Select all", func() { setAll(true) })
+	selectNone := widget.NewButton("Select none", func() { setAll(false) })
+
+	list := container.NewVScroll(container.NewVBox(rows...))
+	list.SetMinSize(fyne.NewSize(480, 220))
+
+	netOnly := widget.NewCheck("Infra only (switch/router/firewall/AP + server/VM/hypervisor)", nil)
 	netOnly.SetChecked(true)
-	loginOK := widget.NewCheck("Require Auvik login authorized", nil)
-	loginOK.SetChecked(true)
+	loginOK := widget.NewCheck("Require Auvik login authorized (skip if status unknown)", nil)
+	loginOK.SetChecked(false) // device/info only includes deviceDetail; login status usually absent
+
 	user := widget.NewEntry()
-	user.SetPlaceHolder("Default SSH username (optional)")
+	user.SetPlaceHolder("Default SSH username for new sessions (optional)")
 	cred := widget.NewEntry()
-	cred.SetPlaceHolder("Vault credential name (optional)")
+	cred.SetPlaceHolder("Default local vault credential name (optional)")
 
 	body := container.NewVBox(
-		widget.NewLabel("Import devices into Customers/<client>/Auvik/ as SSH sessions.\n"+
-			"Existing sessions under the same customer are merged; inventory updates IPs on sync.\n"+
-			"Pair with IT Glue, Hudu, or Passportal for credentials after import."),
-		sel,
-		widget.NewLabel("Customer folder under Customers/:"),
+		widget.NewLabel(fmt.Sprintf("%d Auvik client(s). Each selected client syncs into Customers/<client>/Auvik/.", len(opts.Tenants))),
+		widget.NewLabel("All clients are selected by default so a full MSP inventory is imported in one pass."),
+		container.NewHBox(selectAll, selectNone),
+		list,
+		netOnly,
+		loginOK,
+		user,
+		cred,
 	)
-	if len(opts.CustomerNames) > 0 {
-		body.Add(picker.Select)
-	}
-	body.Add(picker.New)
-	body.Add(netOnly)
-	body.Add(loginOK)
-	body.Add(user)
-	body.Add(cred)
 
-	d := dialog.NewCustomConfirm("Import from Auvik", "Import", "Cancel", body, func(ok bool) {
+	d := dialog.NewCustomConfirm("Sync from Auvik", "Sync selected", "Cancel", body, func(ok bool) {
 		if !ok || opts.OnImport == nil {
 			return
 		}
-		id := labelToID[sel.Selected]
-		if id == "" {
-			dialog.ShowInformation("Auvik", "Pick a client.", w)
-			return
+		var picked []auvik.Tenant
+		for i, c := range checks {
+			if c.Checked {
+				picked = append(picked, opts.Tenants[i])
+			}
 		}
-		customer := picker.Chosen()
-		if customer == "" {
-			dialog.ShowInformation("Auvik", "Customer folder name required.", w)
+		if len(picked) == 0 {
+			dialog.ShowInformation("Auvik", "Select at least one client.", w)
 			return
 		}
 		imp := auvik.ImportOptions{
@@ -89,17 +95,25 @@ func ShowAuvikImportDialog(w fyne.Window, opts AuvikImportOptions) {
 			DefaultUsername:        user.Text,
 			DefaultCredential:      cred.Text,
 		}
-		st, err := opts.OnImport([]string{id}, customer, imp)
-		if err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-		msg := st.Summary()
-		if len(st.Errors) > 0 {
-			msg += "\nErrors: " + fmt.Sprintf("%v", st.Errors)
-		}
-		dialog.ShowInformation("Auvik import", msg, w)
+		// Run off the UI thread — multi-client sync can take a while.
+		go func() {
+			st, err := opts.OnImport(picked, imp)
+			fyne.Do(func() {
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				msg := st.Summary()
+				if len(st.Notes) > 0 {
+					msg += "\n\n" + strings.Join(st.Notes, "\n")
+				}
+				if len(st.Errors) > 0 {
+					msg += "\n\nErrors:\n" + strings.Join(st.Errors, "\n")
+				}
+				ShowSyncResultDialog(w, "Auvik sync", msg, st.ErrorCount())
+			})
+		}()
 	}, w)
-	d.Resize(fyne.NewSize(520, 420))
+	d.Resize(fyne.NewSize(560, 520))
 	d.Show()
 }

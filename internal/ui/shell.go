@@ -224,6 +224,11 @@ type Shell struct {
 	// lastTerminal is the most recently selected SSH tab; used when DocTabs has
 	// no selection (tiled layout) or a non-terminal tab is selected.
 	lastTerminal *Instance
+
+	// customerHeaders maps marker DocTabs items → customer name. DocTabs has
+	// no section API; these tabs are headers above each customer group.
+	customerHeaders map[*container.TabItem]string
+	regrouping      bool
 }
 
 // NewShell builds the shell. Call it after app.New(): it constructs widgets,
@@ -253,6 +258,10 @@ func NewShell(a fyne.App, w fyne.Window) *Shell {
 	// another way into Instance.Close, which is the single teardown path the
 	// close button and the window close box already use.
 	s.tabs.CloseIntercept = func(t *container.TabItem) {
+		if cust, ok := s.customerHeaders[t]; ok {
+			s.confirmCloseCustomerGroup(cust)
+			return
+		}
 		if inst := s.instanceFor(t); inst != nil {
 			inst.Close()
 		}
@@ -267,6 +276,7 @@ func NewShell(a fyne.App, w fyne.Window) *Shell {
 	s.content = container.NewBorder(s.topBar, nil, nil, nil, s.body)
 	s.tileRoots = map[int]fyne.CanvasObject{}
 	s.tileCells = map[int]*tileCell{}
+	s.customerHeaders = map[*container.TabItem]string{}
 	return s
 }
 
@@ -384,13 +394,7 @@ func (s *Shell) ToggleTileLayout() {
 }
 
 func (s *Shell) tile() {
-	terms := make([]*Instance, 0)
-	for _, inst := range s.instances() {
-		if inst == nil || inst.closed.Load() || inst.mount.Kind != KindTerminal || inst.win != nil {
-			continue
-		}
-		terms = append(terms, inst)
-	}
+	terms := s.dockedTerminalsByCustomer()
 	if len(terms) < 2 {
 		return
 	}
@@ -464,6 +468,7 @@ func (s *Shell) untile() {
 		s.body = s.tabs
 	}
 	s.applyBody()
+	s.regroupCustomerTabs()
 	s.refreshSummary()
 }
 
@@ -519,7 +524,7 @@ func (s *Shell) activateTile(inst *Instance) {
 	}
 	s.lastTerminal = inst
 	s.refreshTileFocus()
-	inst.settle()
+	inst.activateFocus()
 }
 
 func (s *Shell) refreshTileFocus() {
@@ -699,6 +704,11 @@ func (s *Shell) SetRibbon(obj fyne.CanvasObject) { s.SetTopChrome(obj) }
 // open anything the driver is running, so the redraw loop has somewhere to hand
 // work to.
 func (s *Shell) Open(m Mount) *Instance {
+	// Non-terminal applets (SFTP, crawl, …) live in DocTabs. While tiled,
+	// DocTabs is off-screen — leave tile mode so the new tab is visible.
+	if s.tiled && m.Kind != KindTerminal {
+		s.untile()
+	}
 	info := s.reg.Add(m.Kind, m.Title)
 
 	inst := &Instance{
@@ -737,6 +747,7 @@ func (s *Shell) Open(m Mount) *Instance {
 	}
 	s.refreshSummary()
 	inst.settle()
+	s.regroupCustomerTabs()
 	return inst
 }
 
@@ -786,6 +797,7 @@ func (i *Instance) Close() {
 	i.shell.reg.Remove(i.info.ID)
 	delete(i.shell.byID, i.info.ID)
 	i.shell.refreshSummary()
+	i.shell.regroupCustomerTabs()
 
 	if i.mount.OnClose != nil {
 		go i.mount.OnClose()
@@ -1031,11 +1043,33 @@ func (i *Instance) canvas() fyne.Canvas {
 	return nil
 }
 
+// activateFocus restores keyboard focus for an already-placed instance.
+// Unlike settle, it does not poll for window size or call OnPlaced (ResyncSize),
+// which made switching between open SSH tabs feel laggy.
+func (i *Instance) activateFocus() {
+	if i == nil || i.closed.Load() || i.mount.Focus == nil {
+		return
+	}
+	c := i.canvas()
+	if c == nil || len(c.Overlays().List()) > 0 {
+		return
+	}
+	if c.Focused() == i.mount.Focus {
+		return
+	}
+	if g, ok := i.mount.Focus.(interface{ GrabFocus() bool }); ok {
+		_ = g.GrabFocus()
+		return
+	}
+	c.Focus(i.mount.Focus)
+}
+
 // settle drives an instance into its new home: it tells the applet which canvas
 // it is on, then waits for the window to reach its real size and for keyboard
 // focus to actually land.
 //
-// Called after every mount and every move.
+// Called after every mount and every move — not on ordinary tab switches
+// (those use activateFocus).
 func (i *Instance) settle() {
 	c := i.canvas()
 	if c == nil {
@@ -1194,6 +1228,7 @@ func (i *Instance) Detach() {
 	i.place.SetIcon(theme.ViewRestoreIcon())
 	i.place.SetToolTip("Redock to main window")
 	i.shell.refreshSummary()
+	i.shell.regroupCustomerTabs()
 	w.Show()
 
 	// Ask the window manager for keyboard focus, not just the canvas.
@@ -1242,6 +1277,7 @@ func (i *Instance) Redock() {
 	i.place.SetIcon(theme.ViewFullScreenIcon())
 	i.place.SetToolTip("Detach to own window")
 	i.shell.refreshSummary()
+	i.shell.regroupCustomerTabs()
 	i.shell.win.RequestFocus()
 
 	// Explicitly, rather than relying on the Select above to fire
@@ -1264,11 +1300,19 @@ func (s *Shell) CloseAll() {
 // terminal stops accepting input the moment you visit another tab and come
 // back, and the terminal gets the blame.
 func (s *Shell) focusTab(t *container.TabItem) {
+	if cust, ok := s.customerHeaders[t]; ok {
+		// Header tabs have no session content — jump to the first terminal
+		// in that customer group so the strip stays usable.
+		s.selectFirstInCustomer(cust)
+		return
+	}
 	if inst := s.instanceFor(t); inst != nil {
 		if inst.mount.Kind == KindTerminal {
 			s.lastTerminal = inst
 		}
-		inst.settle()
+		// Already mounted: focus only. settle()'s size poll + OnPlaced/ResyncSize
+		// made every SSH tab switch feel lagged.
+		inst.activateFocus()
 	}
 }
 
@@ -1442,12 +1486,12 @@ func (s *Shell) Activate(inst *Instance) {
 	}
 	if inst.win != nil {
 		inst.win.RequestFocus()
-		inst.settle()
+		inst.activateFocus()
 		return
 	}
 	if inst.tab != nil {
 		s.tabs.Select(inst.tab)
-		inst.settle()
+		// OnSelected → focusTab → activateFocus; do not settle again.
 		return
 	}
 	if s.tiled {

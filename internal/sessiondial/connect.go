@@ -101,6 +101,10 @@ type Options struct {
 
 	// SkipReachCheck disables the TCP probe (tests / callers that already probed).
 	SkipReachCheck bool
+
+	// HostKeyAlias pins known_hosts under a stable name while dialing a
+	// different address (e.g. Auvik local tunnel → real device IP:port).
+	HostKeyAlias string
 }
 
 func (o Options) logf(format string, args ...any) {
@@ -262,6 +266,7 @@ func connectSSH(ctx context.Context, n sessions.Node, o Options) (term.Transport
 		LegacyAlgorithms: n.LegacyAlgorithms,
 		KnownHostsPath:   n.KnownHostsPath,
 		AuthPrompt:       o.AuthPrompt,
+		HostKeyAlias:     strings.TrimSpace(o.HostKeyAlias),
 	}
 
 	policy, prompt := hostKeyPolicy(n.HostKeyPolicy, o)

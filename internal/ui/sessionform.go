@@ -314,7 +314,7 @@ func (f *SessionForm) build() {
 	f.credential = widget.NewSelect(f.credentialChoices(), func(string) { f.applyCredentialState() })
 	f.authType = widget.NewSelect(sessions.AuthTypes, func(string) { f.applyCredentialState() })
 	f.password = widget.NewPasswordEntry()
-	f.password.SetPlaceHolder("saved to vault on Connect")
+	f.password.SetPlaceHolder("type to connect; optional save to local vault on Connect")
 	f.keyPath = entry("~/.ssh/id_ed25519")
 	f.keyPass = widget.NewPasswordEntry()
 	f.keyPass.SetPlaceHolder("not saved to the session file")

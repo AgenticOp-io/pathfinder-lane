@@ -8,6 +8,7 @@
 package auvik
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -42,16 +44,64 @@ func ResolveCredentials(username, apiKey string) (user, key string) {
 	return user, key
 }
 
-// ResolveBaseURL returns explicit, env AUVIK_BASE_URL, or us1 default.
+var (
+	apiHostRE    = regexp.MustCompile(`(?i)^auvikapi\.([a-z]{2}\d+)\.my\.auvik\.com$`)
+	regionHostRE = regexp.MustCompile(`(?i)(?:^|\.)([a-z]{2}\d+)\.my\.auvik\.com$`)
+	regionOnlyRE = regexp.MustCompile(`(?i)^[a-z]{2}\d+$`)
+)
+
+// ResolveBaseURL returns a normalized API origin (no path, no trailing slash).
+// Accepts dashboard URLs (including MSP vanity hosts like
+// https://acme.us2.my.auvik.com/#...), API URLs, or a bare region code.
 func ResolveBaseURL(base string) string {
-	b := strings.TrimRight(strings.TrimSpace(base), "/")
+	b := strings.TrimSpace(base)
 	if b == "" {
-		b = strings.TrimRight(strings.TrimSpace(os.Getenv("AUVIK_BASE_URL")), "/")
+		b = strings.TrimSpace(os.Getenv("AUVIK_BASE_URL"))
 	}
+	b = strings.TrimSpace(b)
 	if b == "" {
 		return defaultBase
 	}
-	return b
+
+	if regionOnlyRE.MatchString(b) {
+		return apiOrigin(strings.ToLower(b))
+	}
+
+	// Strip fragments/queries early so dashboard deep-links still parse.
+	if i := strings.IndexAny(b, "#?"); i >= 0 {
+		b = b[:i]
+	}
+	b = strings.TrimRight(b, "/")
+
+	if regionOnlyRE.MatchString(b) {
+		return apiOrigin(strings.ToLower(b))
+	}
+
+	u, err := url.Parse(b)
+	if err != nil || u.Host == "" {
+		// Allow host-only paste without scheme.
+		u, err = url.Parse("https://" + strings.TrimPrefix(b, "//"))
+	}
+	if err == nil && u.Host != "" {
+		host := strings.ToLower(u.Host)
+		if m := apiHostRE.FindStringSubmatch(host); len(m) == 2 {
+			return apiOrigin(m[1])
+		}
+		if m := regionHostRE.FindStringSubmatch(host); len(m) == 2 {
+			return apiOrigin(m[1])
+		}
+	}
+
+	// Last resort: find region token before .my.auvik.com in the raw string.
+	if m := regexp.MustCompile(`(?i)([a-z]{2}\d+)\.my\.auvik\.com`).FindStringSubmatch(b); len(m) == 2 {
+		return apiOrigin(m[1])
+	}
+
+	return strings.TrimRight(b, "/")
+}
+
+func apiOrigin(region string) string {
+	return "https://auvikapi." + strings.ToLower(region) + ".my.auvik.com"
 }
 
 // New builds a client. Empty username/key fall back to env.
@@ -75,7 +125,7 @@ func (c *Client) httpClient() *http.Client {
 func (c *Client) creds() (string, string, error) {
 	user, key := ResolveCredentials(c.Username, c.APIKey)
 	if user == "" || key == "" {
-		return "", "", fmt.Errorf("Auvik credentials missing (set AUVIK_USERNAME and AUVIK_API_KEY or Settings → Ops)")
+		return "", "", fmt.Errorf("Auvik credentials missing (set AUVIK_USERNAME and AUVIK_API_KEY or Settings → Integrations)")
 	}
 	return user, key, nil
 }
@@ -117,8 +167,8 @@ func (c *Client) ListDevices(ctx context.Context, tenantIDs []string, pageSize i
 	q := url.Values{}
 	q.Set("tenants", strings.Join(tenantIDs, ","))
 	q.Set("page[first]", fmt.Sprintf("%d", pageSize))
-	// Discovery status helps skip devices Auvik cannot SSH anyway.
-	q.Set("include", "deviceDiscoveryStatus")
+	// Auvik device/info only accepts include=deviceDetail (not discovery status).
+	q.Set("include", "deviceDetail")
 
 	var all []Device
 	path := "/v1/inventory/device/info?" + q.Encode()
@@ -175,17 +225,44 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ou
 		return err
 	}
 	if res.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("Auvik HTTP 401 — check username, API key, and region base URL")
+		return fmt.Errorf("Auvik HTTP 401 — check email, API key, and region (base URL must be https://auvikapi.<region>.my.auvik.com, not the dashboard)")
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		msg := strings.TrimSpace(string(data))
-		if len(msg) > 240 {
-			msg = msg[:240] + "…"
-		}
-		return fmt.Errorf("Auvik HTTP %d: %s", res.StatusCode, msg)
+		return fmt.Errorf("%s", formatHTTPError(res.StatusCode, full, data))
 	}
 	if out == nil || len(data) == 0 {
 		return nil
 	}
-	return json.Unmarshal(data, out)
+	trim := bytes.TrimSpace(data)
+	if len(trim) == 0 {
+		return nil
+	}
+	// Dashboard / wrong-host responses can be HTTP 200 with an HTML body.
+	if trim[0] == '<' || looksLikeHTML(trim) {
+		return fmt.Errorf("%s", formatHTTPError(http.StatusNotFound, full, data))
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return fmt.Errorf("Auvik response from %s is not JSON (%v) — check API base URL is https://auvikapi.<region>.my.auvik.com", full, err)
+	}
+	return nil
+}
+
+func looksLikeHTML(data []byte) bool {
+	s := strings.ToLower(string(data))
+	return strings.Contains(s, "<html") || strings.Contains(s, "<!doctype")
+}
+
+func formatHTTPError(code int, fullURL string, data []byte) string {
+	msg := strings.TrimSpace(string(data))
+	looksHTML := strings.Contains(strings.ToLower(msg), "<html") || strings.Contains(strings.ToLower(msg), "<!doctype")
+	if looksHTML || code == http.StatusNotFound {
+		return fmt.Sprintf("Auvik HTTP %d for %s — use API base https://auvikapi.<region>.my.auvik.com (from your Auvik dashboard URL region, e.g. us1 → https://auvikapi.us1.my.auvik.com). Do not paste the dashboard or /v1 path.", code, fullURL)
+	}
+	if len(msg) > 240 {
+		msg = msg[:240] + "…"
+	}
+	if msg == "" {
+		msg = http.StatusText(code)
+	}
+	return fmt.Sprintf("Auvik HTTP %d: %s", code, msg)
 }

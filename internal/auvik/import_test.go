@@ -10,14 +10,30 @@ func TestSessionNodesFilters(t *testing.T) {
 		{ID: "1", Name: "core-sw", IPs: []string{"10.0.0.1"}, DeviceType: "switch", LoginStatus: "authorized"},
 		{ID: "2", Name: "pc", IPs: []string{"10.0.0.2"}, DeviceType: "workstation", LoginStatus: "authorized"},
 		{ID: "3", Name: "noip", DeviceType: "router", LoginStatus: "authorized"},
+		{ID: "4", Name: "esxi", IPs: []string{"10.0.0.4"}, DeviceType: "hypervisor", LoginStatus: "authorized"},
+		{ID: "5", Name: "guest", IPs: []string{"10.0.0.5"}, DeviceType: "virtualMachine", LoginStatus: "authorized"},
+		{ID: "6", Name: "app", IPs: []string{"10.0.0.6"}, DeviceType: "server", LoginStatus: "authorized"},
 	}
 	opts := ImportOptions{NetworkGearOnly: true, RequireLoginAuthorized: true}
 	nodes, st := SessionNodes(devs, opts)
-	if len(nodes) != 1 || nodes[0].Host != "10.0.0.1" {
-		t.Fatalf("nodes %+v", nodes)
+	if len(nodes) != 4 {
+		t.Fatalf("want 4 infra nodes, got %+v", nodes)
 	}
-	if st.Imported != 1 || st.Skipped != 1 || st.NoIP != 1 {
+	if st.Imported != 4 || st.Skipped != 1 || st.NoIP != 1 {
 		t.Fatalf("stats %+v", st)
+	}
+}
+
+func TestIsSyncDeviceType(t *testing.T) {
+	want := map[string]bool{
+		"switch": true, "l3Switch": true, "router": true, "firewall": true,
+		"hypervisor": true, "virtualMachine": true, "virtualAppliance": true, "server": true,
+		"workstation": false, "printer": false, "phone": false, "camera": false,
+	}
+	for typ, ok := range want {
+		if got := isSyncDeviceType(typ); got != ok {
+			t.Fatalf("%s: got %v want %v", typ, got, ok)
+		}
 	}
 }
 

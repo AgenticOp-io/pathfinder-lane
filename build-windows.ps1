@@ -1,4 +1,4 @@
-# build-windows.ps1
+﻿# build-windows.ps1
 #
 # Build the PathfinderSSH front ends natively on Windows (run this ON Windows,
 # in PowerShell).
@@ -129,7 +129,7 @@ if ($select.Count -eq 1 -and $select[0] -eq "all") {
 } elseif ($select.Count -eq 1 -and $select[0] -eq "gui") {
     $list = @($all | Where-Object { Test-Gui $_ })
 } elseif ($select.Count -eq 1 -and $select[0] -eq "installers") {
-    $list = @("pathfinder", "pfseed", "pfinstall", "pfengineer-install", "pfsetup-o365", "pfsetup-google", "pfsetup-apis")
+    $list = @("pathfinder", "pfseed", "pfinstall", "pfengineer-install", "pfsetup-msp", "pfsetup-o365", "pfsetup-google", "pfsetup-apis")
 } elseif ($select.Count -eq 1 -and $select[0] -eq "cli") {
     $list = @($all | Where-Object { -not (Test-Gui $_) })
 } else {
@@ -196,3 +196,4 @@ if ($Install) {
     & $installer @args
     exit $LASTEXITCODE
 }
+

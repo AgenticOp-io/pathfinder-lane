@@ -1,4 +1,4 @@
-package installcmd
+﻿package installcmd
 
 import (
 	"fmt"
@@ -53,15 +53,16 @@ func applySetup(opts Options) error {
 		if err := mspauth.SaveSoloSetup(home); err != nil {
 			return fmt.Errorf("setup %s: %w", setup, err)
 		}
-		fmt.Println("Solo mode — no Microsoft/Google sign-in required.")
+		fmt.Println("Solo mode â€” no Microsoft/Google sign-in required.")
 		return nil
 	}
 	if _, ok := mspauth.ParseSetupMode(setup); ok {
 		fmt.Println("Cloud organization setup uses separate tools after install:")
-		fmt.Println("  pfsetup-o365.exe   Microsoft 365 tenant registration")
-		fmt.Println("  pfsetup-google.exe Google Workspace registration")
-		fmt.Println("  pfsetup-apis.exe   API keys for PSA/RMM/inventory")
+		fmt.Println("  pfsetup-msp.exe   Microsoft 365 tenant registration")
+		fmt.Println("  pfsetup-msp.exe Google Workspace registration")
+		fmt.Println("  Settings → Tools   API keys (Auvik, PSA, Cursor, …)")
 		return nil
 	}
 	return fmt.Errorf("unknown setup mode %q (use solo)", setup)
 }
+

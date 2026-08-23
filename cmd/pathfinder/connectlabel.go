@@ -4,11 +4,25 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/scottpeterman/pathfinderssh/internal/auvik"
 	"github.com/scottpeterman/pathfinderssh/internal/jump"
 	"github.com/scottpeterman/pathfinderssh/internal/sessions"
+	"github.com/scottpeterman/pathfinderssh/internal/ui"
 )
 
-func connectStatusLabel(n sessions.Node) string {
+func connectStatusLabel(folder string, n sessions.Node, tr sessions.Tree) string {
+	home := ui.GetAppHome()
+	n = auvik.EnrichTunnelDomain(home, folder, n, tr)
+	// Tunnel-first sessions never TCP-probe the private device IP; say so up front
+	// so the dialog does not look stuck on "Checking reachability".
+	if auvik.ShouldUseTunnelFirst(n, home) {
+		domain := auvik.ResolveTunnelDomain(home, n)
+		msg := "Opening Auvik tunnel to " + n.Target()
+		if domain != "" {
+			msg += " (" + domain + ")"
+		}
+		return msg + " …"
+	}
 	msg := "Checking reachability of " + n.Target()
 	if n.Jump.InUse() {
 		msg += fmt.Sprintf("\nJump hop: %s@%s", n.Jump.Username, n.Jump.Host)

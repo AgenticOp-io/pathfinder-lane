@@ -27,7 +27,8 @@ type InstallWizardOptions struct {
 	Home    string
 }
 
-// ShowInstallWizard runs a short install flow: ready → progress → complete.
+// ShowInstallWizard runs standalone installation: ready -> install -> complete.
+// APIs and Cursor are configured in Pathfinder Settings after install — not here.
 func ShowInstallWizard(w fyne.Window, opts InstallWizardOptions) {
 	if w == nil {
 		return
@@ -36,21 +37,20 @@ func ShowInstallWizard(w fyne.Window, opts InstallWizardOptions) {
 	var (
 		phase      int
 		destExe    string
-		soloMode   = widget.NewCheck("Solo mode (local vault — configure Auvik, PSA, and Cursor without Microsoft/Google sign-in)", nil)
 		bodySlot   = container.NewMax()
 		stepBar    = widget.NewProgressBar()
 		installBtn = widget.NewButtonWithIcon("Install", theme.DownloadIcon(), nil)
 		cancelBtn  = widget.NewButton("Cancel", func() { fyne.CurrentApp().Quit() })
 	)
-	soloMode.SetChecked(true)
 	installBtn.Importance = widget.HighImportance
 	stepBar.SetValue(0)
 
 	bundleDir := bundleDirFromExe()
 	title, subtitle := brandedInstallTitles(bundleDir)
-	if hasBundleEnrollment(bundleDir) {
-		soloMode.SetChecked(false)
-		soloMode.Hide()
+	standalone := !hasBundleEnrollment(bundleDir)
+	if standalone {
+		title = "Standalone installation"
+		subtitle = "Install Pathfinder — local credentials in Settings, no IT Glue required"
 	}
 
 	hero := installWizardHero(title, subtitle)
@@ -73,7 +73,7 @@ func ShowInstallWizard(w fyne.Window, opts InstallWizardOptions) {
 			}
 			destExe = dest
 
-			if soloMode.Checked {
+			if standalone {
 				home := strings.TrimSpace(opts.Home)
 				if home == "" {
 					home = GetAppHome()
@@ -114,13 +114,13 @@ func ShowInstallWizard(w fyne.Window, opts InstallWizardOptions) {
 						"Ready to install",
 						"Copies apps to AppData and creates shortcuts",
 						container.NewVBox(
-							widget.NewLabel("Includes: pathfinder, pfseed, integration setup tools, and installers."),
+							widget.NewLabel("Installs Pathfinder and related tools for this Windows profile."),
 							widget.NewLabel("Your sessions and vault in ~/.pathfinderssh are kept when you update."),
-							soloMode,
+							widget.NewLabel("After install: use username/password on each session, or save credentials in Settings → File → Manage credentials."),
+							widget.NewLabel("Optional: Auvik, PSA, Cursor, and other APIs in Settings → Tools — IT Glue is not required."),
 							widget.NewLabel(ver),
 						),
 					),
-					widget.NewLabel("Cloud full MSP setup (Microsoft 365 / Google) runs separately after install."),
 				),
 			}
 			installBtn.Show()
@@ -134,7 +134,7 @@ func ShowInstallWizard(w fyne.Window, opts InstallWizardOptions) {
 						"Installing",
 						"Copying files",
 						container.NewVBox(
-							widget.NewLabel("Installing PathfinderSSH MSP…"),
+							widget.NewLabel("Installing PathfinderSSH…"),
 							widget.NewProgressBarInfinite(),
 						),
 					),
@@ -151,16 +151,6 @@ func ShowInstallWizard(w fyne.Window, opts InstallWizardOptions) {
 				fyne.CurrentApp().Quit()
 			})
 			openBtn.Importance = widget.HighImportance
-
-			apiBtn := widget.NewButtonWithIcon("Standalone MSP setup (Auvik, APIs, Cursor AI)", theme.SettingsIcon(), func() {
-				launchBundledTool("pfsetup-apis", w)
-			})
-			m365Btn := widget.NewButtonWithIcon("Full MSP setup — Microsoft 365", theme.ComputerIcon(), func() {
-				launchBundledTool("pfsetup-o365", w)
-			})
-			googleBtn := widget.NewButtonWithIcon("Full MSP setup — Google Workspace", theme.ComputerIcon(), func() {
-				launchBundledTool("pfsetup-google", w)
-			})
 			closeBtn := widget.NewButton("Close", func() { fyne.CurrentApp().Quit() })
 
 			bodySlot.Objects = []fyne.CanvasObject{
@@ -169,13 +159,12 @@ func ShowInstallWizard(w fyne.Window, opts InstallWizardOptions) {
 					stepBar,
 					widget.NewCard(
 						"Installation complete",
-						"Run full MSP setup or open Pathfinder",
+						"Open Pathfinder — local credentials work without IT Glue",
 						container.NewVBox(
 							widget.NewLabel(msg),
-							widget.NewLabel("MSP admin next steps (auth, security, engineer packages):"),
-							container.NewVBox(m365Btn, googleBtn),
-							widget.NewLabel("Standalone / solo: configure integrations and Cursor without cloud sign-in:"),
-							apiBtn,
+							widget.NewLabel("Connect: enter username and password on a session, or create credentials in Settings → File → Manage credentials."),
+							widget.NewLabel("Optional integrations (Auvik, PSA, Cursor): Settings → Tools."),
+							widget.NewLabel("MSP admins: run pfsetup-msp.exe for org branding, cloud sign-in, security, and engineer packages."),
 							container.NewHBox(openBtn, closeBtn),
 						),
 					),

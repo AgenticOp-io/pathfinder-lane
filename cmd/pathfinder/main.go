@@ -43,6 +43,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,6 +88,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/sessiondial"
 	"github.com/scottpeterman/pathfinderssh/internal/sessions"
 	"github.com/scottpeterman/pathfinderssh/internal/storesearch"
+	"github.com/scottpeterman/pathfinderssh/internal/synclog"
 	"github.com/scottpeterman/pathfinderssh/internal/term"
 	"github.com/scottpeterman/pathfinderssh/internal/topo"
 	"github.com/scottpeterman/pathfinderssh/internal/ui"
@@ -312,6 +314,8 @@ func main() {
 	})
 
 	h.auvikTunnels = auvik.NewTunnelManager(h.base.AuvikTunnelPath)
+	h.auvikTunnels.SetAppHome(ui.GetAppHome())
+	h.auvikTunnels.SetCredentials(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
 	h.startAuvikPeriodicSync()
 
 	// Immediately before ShowAndRun, like an applet's Start: the watchdog
@@ -879,17 +883,9 @@ func (h *host) buildChrome() {
 			h.sendChat(text, mode, customer)
 		},
 		OnAdhocConnect: h.connectAdhoc,
-		BarButtons: btnFile.Buttons,
+		BarButtons:  btnFile.Buttons,
 		OnBarAction: func(b buttons.Button, all bool) { h.barButtonAction(b, all) },
-		OnBarEdit: func() {
-			scriptPath := scripts.Path(ui.GetAppHome())
-			dialog.ShowInformation("Button bar",
-				"Edit "+path+" and restart Pathfinder.\n\n"+
-					"Send a command:\n  label: Show run\n  send: show running-config\\n\n"+
-					"Run a script (from "+scriptPath+"):\n  label: Backup\n  script: My Script Name\n\n"+
-					"Optional: scope: all  (or check All tabs when clicking)",
-				h.win)
-		},
+		OnBarEdit:   h.openButtonEditor,
 		Status:         h.shell.SummaryLabel(),
 		WorkContext:    h.workContextLabel,
 		ShowCursorAI:   h.base.TroubleshootAddon,
@@ -994,19 +990,25 @@ func (h *host) showScriptsMenu(anchor fyne.CanvasObject) {
 		menuItems = append(menuItems, fyne.NewMenuItemSeparator())
 	}
 	menuItems = append(menuItems,
-		fyne.NewMenuItem("Run script…", h.runScriptDialog),
-		fyne.NewMenuItem("Script editor…", h.openScriptEditor),
+		fyne.NewMenuItem("Run script...", h.runScriptDialog),
+		fyne.NewMenuItem("New / edit scripts...", h.openScriptEditor),
+		fyne.NewMenuItem("Delete script...", h.deleteScriptDialog),
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Start recording…", h.startScriptRecording),
-		fyne.NewMenuItem("Stop recording…", h.stopScriptRecording),
-		fyne.NewMenuItem("Run Python script…", h.runPythonScript),
+		fyne.NewMenuItem("Start recording...", h.startScriptRecording),
+		fyne.NewMenuItem("Stop recording...", h.stopScriptRecording),
+		fyne.NewMenuItem("Run Python script...", h.runPythonScript),
 	)
 	m := fyne.NewMenu("", menuItems...)
 	widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
 }
 
-func (h *host) showSessionMenu(anchor fyne.CanvasObject, sess *ui.Session, inst *ui.Instance, label string) {
+func (h *host) showSessionMenu(anchor fyne.CanvasObject, sess *ui.Session, inst *ui.Instance, node sessions.Node, folder string) {
+	label := node.Label()
 	items := []*fyne.MenuItem{
+		fyne.NewMenuItem("Reconnect", func() {
+			h.reconnectTerminal(sess, inst, folder, node)
+		}),
+		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Transfer files (SFTP)…", func() {
 			h.openSFTPTab(sess, "SFTP — "+label)
 		}),
@@ -1104,20 +1106,39 @@ func (h *host) openSFTPTab(sess *ui.Session, title string) {
 		dialog.ShowInformation("File Transfer", "SFTP requires an SSH session (not telnet or serial).", h.win)
 		return
 	}
-	view, err := ui.NewSFTPView(h.win, client)
-	if err != nil {
-		dialog.ShowError(err, h.win)
-		return
-	}
 	if title == "" {
 		title = "SFTP"
 	}
-	h.shell.Open(ui.Mount{
-		Kind:   ui.KindSFTP,
-		Title:  title,
-		Applet: view,
-		Busy:   func() string { return "" },
-	})
+	// Handshake + first directory listing can stall on network gear. Do that
+	// off the UI thread with a progress dialog so the button does not look dead.
+	prog := dialog.NewProgressInfinite("File Transfer", "Opening SFTP…", h.win)
+	prog.Show()
+	go func() {
+		cli, err := ui.DialSFTP(client)
+		var seed ui.SFTPSeed
+		if err == nil {
+			// Prefetch cwd listing off the UI thread. Never Getwd/RealPath —
+			// that hangs on many network SSH daemons and freezes the app.
+			seed = ui.PrefetchSFTP(cli)
+		}
+		fyne.Do(func() {
+			prog.Hide()
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("SFTP: %w", err), h.win)
+				return
+			}
+			view := ui.NewSFTPViewFromSeed(h.win, cli, seed)
+			if h.shell.Tiled() {
+				h.shell.ToggleTileLayout()
+			}
+			h.shell.Open(ui.Mount{
+				Kind:   ui.KindSFTP,
+				Title:  title,
+				Applet: view,
+				Busy:   func() string { return "" },
+			})
+		})
+	}()
 }
 
 func (h *host) openPortForwards() {
@@ -1209,6 +1230,68 @@ func (h *host) openScriptEditor() {
 			// Menu is rebuilt on each Scripts button tap from disk.
 		},
 	})
+}
+
+func (h *host) openButtonEditor() {
+	path := buttons.Path(ui.GetAppHome())
+	file, err := buttons.Load(path)
+	if err != nil {
+		file = buttons.Defaults()
+	}
+	names := make([]string, 0)
+	for _, sc := range h.loadScripts().Scripts {
+		if n := strings.TrimSpace(sc.Name); n != "" {
+			names = append(names, n)
+		}
+	}
+	ui.ShowButtonEditor(h.win, ui.ButtonEditorOptions{
+		Path:        path,
+		File:        file,
+		ScriptNames: names,
+		OnSaved: func(buttons.File) {
+			h.reloadBarButtons()
+		},
+		OnManageScripts: h.openScriptEditor,
+	})
+}
+
+func (h *host) deleteScriptDialog() {
+	f := h.loadScripts()
+	if len(f.Scripts) == 0 {
+		dialog.ShowInformation("Scripts", "No scripts to delete. Use New / edit scripts... to create one.", h.win)
+		return
+	}
+	names := make([]string, len(f.Scripts))
+	for i, sc := range f.Scripts {
+		names[i] = sc.Name
+	}
+	sel := widget.NewSelect(names, nil)
+	sel.SetSelected(names[0])
+	dialog.ShowCustomConfirm("Delete script", "Delete", "Cancel",
+		container.NewVBox(
+			widget.NewLabel("Remove this script from scripts.yaml:"),
+			sel,
+		),
+		func(ok bool) {
+			if !ok || sel.Selected == "" {
+				return
+			}
+			name := sel.Selected
+			out := f.Scripts[:0]
+			for _, sc := range f.Scripts {
+				if sc.Name == name {
+					continue
+				}
+				out = append(out, sc)
+			}
+			f.Scripts = out
+			path := scripts.Path(ui.GetAppHome())
+			if err := scripts.Save(path, f); err != nil {
+				dialog.ShowError(err, h.win)
+				return
+			}
+			dialog.ShowInformation("Scripts", "Deleted \""+name+"\".", h.win)
+		}, h.win)
 }
 
 func (h *host) runNamedScript(name string) {
@@ -1995,77 +2078,97 @@ func (h *host) syncPSACustomers() {
 }
 
 func (h *host) importFromAuvik() {
-	cli := auvik.New(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	if err := cli.Verify(ctx); err != nil {
-		dialog.ShowError(err, h.win)
-		return
-	}
-	tenants, err := cli.ListTenants(ctx)
-	if err != nil {
-		dialog.ShowError(err, h.win)
-		return
-	}
-	ui.ShowAuvikImportDialog(h.win, ui.AuvikImportOptions{
-		Tenants:       tenants,
-		CustomerNames: h.mspCustomerNames(),
-		OnImport: func(tenantIDs []string, customerFolder string, imp auvik.ImportOptions) (auvik.ImportStats, error) {
-			ctx2, cancel2 := context.WithTimeout(context.Background(), 120*time.Second)
-			defer cancel2()
-			devs, err := cli.ListDevices(ctx2, tenantIDs, 300)
-			if err != nil {
-				return auvik.ImportStats{}, err
-			}
-			var tenant *auvik.Tenant
-			for i := range tenants {
-				if tenants[i].ID == tenantIDs[0] {
-					tenant = &tenants[i]
-					break
-				}
-			}
-			if tenant == nil {
-				return auvik.ImportStats{}, fmt.Errorf("unknown tenant id %q", tenantIDs[0])
-			}
-			imp.DefaultUsername = strings.TrimSpace(imp.DefaultUsername)
-			if imp.DefaultUsername == "" {
-				imp.DefaultUsername = h.base.AuvikDefaultUsername
-			}
-			if strings.TrimSpace(imp.DefaultCredential) == "" {
-				imp.DefaultCredential = h.base.AuvikDefaultCredential
-			}
-			customer := h.resolveMSPCustomer(customerFolder)
-			if customer == "" {
-				customer = h.resolveMSPCustomer(tenant.Name)
-			}
-			tr := h.tree.Tree()
-			syncRes := auvik.SyncTenantTree(&tr, devs, auvik.SyncOptions{
-				ImportOptions:     imp,
-				Tenant:            *tenant,
-				CustomerName:      customer,
-				MoveToAuvikFolder: true,
-				UseTunnelDefault:  h.base.AuvikAutoTunnel,
+	// Network calls must not run on the UI thread — they freeze Settings/menus.
+	go func() {
+		home := ui.GetAppHome()
+		cli := auvik.New(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if err := cli.Verify(ctx); err != nil {
+			synclog.Error(home, "auvik", "", "verify failed", err.Error()+"\n"+synclog.AuvikHint(err.Error()))
+			fyne.Do(func() { dialog.ShowError(err, h.win) })
+			return
+		}
+		tenants, err := cli.ListTenants(ctx)
+		if err != nil {
+			synclog.Error(home, "auvik", "", "list tenants failed", err.Error()+"\n"+synclog.AuvikHint(err.Error()))
+			fyne.Do(func() { dialog.ShowError(err, h.win) })
+			return
+		}
+		fyne.Do(func() {
+			ui.ShowAuvikImportDialog(h.win, ui.AuvikImportOptions{
+				Tenants:       tenants,
+				CustomerNames: h.mspCustomerNames(),
+				OnImport: func(picked []auvik.Tenant, imp auvik.ImportOptions) (auvik.ImportStats, error) {
+					ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Minute)
+					defer cancel2()
+					imp.DefaultUsername = strings.TrimSpace(imp.DefaultUsername)
+					if imp.DefaultUsername == "" {
+						imp.DefaultUsername = h.base.AuvikDefaultUsername
+					}
+					if strings.TrimSpace(imp.DefaultCredential) == "" {
+						imp.DefaultCredential = h.base.AuvikDefaultCredential
+					}
+					tr := h.tree.Tree()
+					agg := auvik.ImportStats{}
+					synclog.Info(home, "auvik", "", fmt.Sprintf("sync selected start (%d client(s))", len(picked)), "")
+					for _, tenant := range picked {
+						if m, err := auvik.LoadTenantMap(home); err == nil && m.ShouldSkipSync(tenant.ID) {
+							agg.Notes = append(agg.Notes, tenant.Name+": skipped (no API permission)")
+							continue
+						}
+						devs, err := cli.ListDevices(ctx2, []string{tenant.ID}, 300)
+						if err != nil {
+							msg := err.Error()
+							hint := synclog.AuvikHint(msg)
+							if auvik.IsPermissionDenied(err) {
+								if m, e := auvik.LoadTenantMap(home); e == nil {
+									m.MarkSkipSync(tenant.ID, msg)
+									_ = auvik.SaveTenantMap(home, m)
+								}
+								agg.Notes = append(agg.Notes, tenant.Name+": skipped (no API permission — will not retry)")
+								synclog.Warn(home, "auvik", tenant.Name, "skipped — no API permission", msg+"\n"+hint)
+								continue
+							}
+							agg.Errors = append(agg.Errors, tenant.Name+": "+msg)
+							synclog.Error(home, "auvik", tenant.Name, "list devices failed", msg+"\n"+hint)
+							continue
+						}
+						customer := h.auvikResolveCustomer(tenant)
+						syncRes := auvik.SyncTenantTree(&tr, devs, auvik.SyncOptions{
+							ImportOptions:     imp,
+							Tenant:            tenant,
+							CustomerName:      customer,
+							MoveToAuvikFolder: true,
+							UseTunnelDefault:  h.base.AuvikAutoTunnel,
+						})
+						agg.Imported += syncRes.Created
+						agg.Skipped += syncRes.Skipped
+						agg.NoIP += syncRes.NoIP
+						note := fmt.Sprintf("%s → Customers/%s/Auvik: %s", tenant.Name, customer, syncRes.Summary())
+						agg.Notes = append(agg.Notes, note)
+						if len(syncRes.Errors) > 0 {
+							for _, e := range syncRes.Errors {
+								agg.Errors = append(agg.Errors, tenant.Name+": "+e)
+								synclog.Error(home, "auvik", tenant.Name, e, synclog.AuvikHint(e))
+							}
+						}
+						synclog.Info(home, "auvik", tenant.Name, syncRes.Summary(),
+							fmt.Sprintf("customer=%s devices=%d", customer, len(devs)))
+						if m, err := auvik.LoadTenantMap(home); err == nil {
+							m.Set(tenant.ID, customer)
+							m.SetDomain(tenant.ID, tenant.Name)
+							_ = auvik.SaveTenantMap(home, m)
+						}
+					}
+					h.tree.SetTree(tr)
+					h.saveTree(tr)
+					synclog.Info(home, "auvik", "", "sync selected finished", agg.Summary())
+					return agg, nil
+				},
 			})
-			h.tree.SetTree(tr)
-			h.saveTree(tr)
-			if m, err := auvik.LoadTenantMap(ui.GetAppHome()); err == nil {
-				m.Set(tenant.ID, customer)
-				_ = auvik.SaveTenantMap(ui.GetAppHome(), m)
-			}
-			st := auvik.ImportStats{
-				Imported: syncRes.Created,
-				Skipped:  syncRes.Skipped,
-				NoIP:     syncRes.NoIP,
-				Errors:   syncRes.Errors,
-			}
-			// Surface merge/update counts in the summary string via Errors note.
-			if syncRes.Merged > 0 || syncRes.Updated > 0 || syncRes.Moved > 0 {
-				st.Errors = append(st.Errors,
-					fmt.Sprintf("merged %d, updated %d, moved %d", syncRes.Merged, syncRes.Updated, syncRes.Moved))
-			}
-			return st, nil
-		},
-	})
+		})
+	}()
 }
 
 func (h *host) importFromITGlue() {
@@ -2148,33 +2251,54 @@ func (h *host) syncAuvikNow() {
 }
 
 type auvikSyncAggregate struct {
-	Tenants int
-	Summary string
-	Changed bool
+	Tenants  int
+	Summary  string
+	Changed  bool
+	ErrCount int
 }
 
 func (h *host) auvikImportDefaults() auvik.ImportOptions {
 	user, cred := h.mspInventoryDefaults()
 	return auvik.ImportOptions{
 		NetworkGearOnly:        true,
-		RequireLoginAuthorized: true,
+		RequireLoginAuthorized: false, // include=deviceDetail does not return login status
 		DefaultUsername:        user,
 		DefaultCredential:      cred,
 	}
 }
 
+func (h *host) auvikUseTunnelDefault() bool {
+	// Default on for MSP when Auvik API is configured unless explicitly disabled in settings file.
+	if h.base.AuvikAutoTunnel {
+		return true
+	}
+	// Zero value in JSON means unset — treat configured Auvik API as intent to use tunnels.
+	return strings.TrimSpace(h.base.AuvikAPIKey) != "" && strings.TrimSpace(h.base.AuvikUsername) != ""
+}
+
 func (h *host) runAuvikSyncAll(interactive bool) {
 	go func() {
+		home := ui.GetAppHome()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
+		synclog.Info(home, "auvik", "", "sync ALL start", "")
 		agg, err := h.auvikSyncPass(ctx)
+		if err != nil {
+			detail := err.Error()
+			if tip := synclog.AuvikHint(detail); tip != "" {
+				detail += "\n" + tip
+			}
+			synclog.Error(home, "auvik", "", "sync ALL failed", detail)
+		} else {
+			synclog.Info(home, "auvik", "", "sync ALL finished", agg.Summary)
+		}
 		fyne.Do(func() {
 			if interactive {
 				if err != nil {
 					dialog.ShowError(err, h.win)
 					return
 				}
-				dialog.ShowInformation("Auvik sync", agg.Summary, h.win)
+				ui.ShowSyncResultDialog(h.win, "Auvik sync", agg.Summary, agg.ErrCount)
 				return
 			}
 			if err != nil {
@@ -2186,7 +2310,9 @@ func (h *host) runAuvikSyncAll(interactive bool) {
 			}
 			if h.shell != nil && h.shell.SummaryLabel() != nil {
 				note := "Auvik sync OK"
-				if agg.Changed {
+				if agg.ErrCount > 0 {
+					note = fmt.Sprintf("Auvik sync: %d error(s) — open MSP sync log", agg.ErrCount)
+				} else if agg.Changed {
 					note = "Auvik sync: " + strings.Split(agg.Summary, "\n")[0]
 				}
 				h.shell.SummaryLabel().SetText(note)
@@ -2206,10 +2332,11 @@ func (h *host) auvikResolveCustomer(tenant auvik.Tenant) string {
 }
 
 func (h *host) auvikSyncPass(ctx context.Context) (auvikSyncAggregate, error) {
+	home := ui.GetAppHome()
 	tr := h.tree.Tree()
 	aggOut, err := auvik.SyncAllTenants(ctx, auvik.SyncAllOptions{
 		Client:            auvik.New(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL),
-		AppHome:           ui.GetAppHome(),
+		AppHome:           home,
 		Tree:              &tr,
 		ImportDefaults:    h.auvikImportDefaults,
 		ResolveCustomer:   h.auvikResolveCustomer,
@@ -2220,14 +2347,24 @@ func (h *host) auvikSyncPass(ctx context.Context) (auvikSyncAggregate, error) {
 	if err != nil {
 		return auvikSyncAggregate{}, err
 	}
+	for _, e := range aggOut.Errors {
+		detail := e
+		if tip := synclog.AuvikHint(e); tip != "" {
+			detail += "\n" + tip
+		}
+		synclog.Error(home, "auvik", "", e, detail)
+	}
 	if aggOut.Changed {
-		h.tree.SetTree(tr)
+		// Persist off the UI thread; redraw on it. SetTree also marshals, but
+		// keep the hop here so a future SetTree change cannot regress sync.
 		h.saveTree(tr)
+		fyne.Do(func() { h.tree.SetTree(tr) })
 	}
 	return auvikSyncAggregate{
-		Tenants: aggOut.Tenants,
-		Changed: aggOut.Changed,
-		Summary: aggOut.Summary,
+		Tenants:  aggOut.Tenants,
+		Changed:  aggOut.Changed,
+		Summary:  aggOut.Summary,
+		ErrCount: len(aggOut.Errors),
 	}, nil
 }
 
@@ -2260,23 +2397,102 @@ func (h *host) startAuvikPeriodicSync() {
 	}()
 }
 
+// releaseAuvikTunnelForNode drops one Ensure lease for this session's mapping.
+// No-op when the node has no Auvik domain or no live tunnel. Call from tab
+// OnClose, abandoned connects, and before reconnect (so refs stay accurate).
+func (h *host) releaseAuvikTunnelForNode(n sessions.Node) {
+	if h == nil || h.auvikTunnels == nil {
+		return
+	}
+	domain := auvik.ResolveTunnelDomain(ui.GetAppHome(), n)
+	deviceIP := strings.TrimSpace(n.Host)
+	if domain == "" || deviceIP == "" || deviceIP == "127.0.0.1" {
+		return
+	}
+	remotePort := n.Port
+	if remotePort == 0 {
+		remotePort = sessions.TransportSSH.DefaultPort()
+	}
+	h.auvikTunnels.Release(domain, deviceIP, remotePort)
+}
+
 func (h *host) tryAuvikTunnelConnect(ctx context.Context, node sessions.Node, opts sessiondial.Options) (term.Transport, error) {
+	home := ui.GetAppHome()
 	if h.auvikTunnels == nil {
 		h.auvikTunnels = auvik.NewTunnelManager(h.base.AuvikTunnelPath)
+	}
+	h.auvikTunnels.SetAppHome(home)
+	h.auvikTunnels.BinPath = h.base.AuvikTunnelPath
+	h.auvikTunnels.SetCredentials(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
+
+	domain := auvik.ResolveTunnelDomain(home, node)
+	if domain == "" {
+		err := fmt.Errorf("Auvik tunnel: no client domain on this session — run Sync from Auvik again")
+		synclog.Error(home, "auvik-tunnel", node.Label(), "missing domain", err.Error())
+		return nil, err
 	}
 	remotePort := node.Port
 	if remotePort == 0 {
 		remotePort = sessions.TransportSSH.DefaultPort()
 	}
-	local, err := h.auvikTunnels.Ensure(ctx, node.AuvikDomain, node.Host, remotePort, node.AuvikTunnelPort)
+	deviceIP := strings.TrimSpace(node.Host)
+	local, err := h.auvikTunnels.Ensure(ctx, domain, deviceIP, remotePort, node.AuvikTunnelPort)
 	if err != nil {
+		synclog.Error(home, "auvik-tunnel", domain, "tunnel failed", err.Error())
 		return nil, err
 	}
 	tunOpts := opts
 	tunOpts.SkipReachCheck = true
+	// Pin known_hosts to the real device, not 127.0.0.1:ephemeralPort — otherwise
+	// every new local port looks like an unknown host and pops the Accept dialog.
+	tunOpts.HostKeyAlias = net.JoinHostPort(deviceIP, strconv.Itoa(remotePort))
+	// Auvik already authenticated the control plane; auto-TOFU on first contact
+	// (still fail-closed on key mismatch against a pinned device identity).
+	tunOpts.HostKeyPrompt = func(hostname string, remote net.Addr, key ssh.PublicKey) (bool, error) {
+		log.Printf("[hostkey] auto-accepted via Auvik tunnel: %s (%s) %s %s",
+			hostname, remote, key.Type(), ssh.FingerprintSHA256(key))
+		return true, nil
+	}
 	tunNode := auvik.DialNodeViaTunnel(node, local)
-	log.Printf("[auvik] tunnel localhost:%d → %s:%d (%s)", local, node.Host, remotePort, node.AuvikDomain)
-	return sessiondial.Connect(ctx, tunNode, tunOpts)
+	log.Printf("[auvik] tunnel localhost:%d → %s:%d (%s)", local, deviceIP, remotePort, domain)
+	synclog.Info(home, "auvik-tunnel", domain,
+		fmt.Sprintf("SSH via localhost:%d → %s:%d", local, deviceIP, remotePort), node.Label())
+	tp, err := sessiondial.Connect(ctx, tunNode, tunOpts)
+	if err != nil && tunnelSSHLooksDead(err) {
+		// Cached/orphan tunnel accepted TCP but did not forward SSH — recycle once.
+		log.Printf("[auvik] SSH via tunnel dead (%v) — restarting tunnel", err)
+		synclog.Warn(home, "auvik-tunnel", domain, "SSH via tunnel dead, restarting", err.Error())
+		h.auvikTunnels.Invalidate(domain, deviceIP, remotePort)
+		local, err = h.auvikTunnels.Ensure(ctx, domain, deviceIP, remotePort, node.AuvikTunnelPort)
+		if err != nil {
+			synclog.Error(home, "auvik-tunnel", domain, "tunnel restart failed", err.Error())
+			return nil, err
+		}
+		tunNode = auvik.DialNodeViaTunnel(node, local)
+		tp, err = sessiondial.Connect(ctx, tunNode, tunOpts)
+	}
+	if err != nil {
+		// Ensure acquired a ref; drop it so a failed dial does not leave the tunnel up.
+		h.auvikTunnels.Release(domain, deviceIP, remotePort)
+		synclog.Error(home, "auvik-tunnel", domain, "SSH via tunnel failed", err.Error())
+	}
+	return tp, err
+}
+
+func tunnelSSHLooksDead(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sub := range []string{
+		"i/o timeout", "handshake failed", "connection reset",
+		"connection refused", "eof", "broken pipe",
+	} {
+		if strings.Contains(msg, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // importMap turns a crawl's map.json into sessions under Customers/<name>/….
@@ -2487,36 +2703,53 @@ func (h *host) exportSessions() {
 }
 
 func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(sessions.Node)) {
-	// The ctx is created HERE, not inside the dial goroutine, because the
-	// Cancel button has to be able to reach it. The 90s ceiling stays as the
-	// unattended bound; Cancel is the attended one.
+	// ctx is created here so Cancel can reach it. 90s is the unattended ceiling.
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 
-	// Fyne's dialog.Hide() runs the onClosed callback too, so the Cancel
-	// button and the success path both arrive here. One CAS decides which of
-	// them got there first, and the loser does nothing: without it, hiding
-	// the dialog on success would cancel the context it just finished with
-	// and log a cancellation that never happened.
-	var settled atomic.Bool
+	// Fyne Hide() always fires OnClosed. Store the dial result before Hide so
+	// OnClosed shows the error (or mounts) only after Connecting is gone.
+	// Hide+ShowError in the same tick logs Fyne overlay errors and can lock UI.
+	type dialOutcome struct {
+		err      error
+		tp       term.Transport
+		dialNode sessions.Node
+	}
+	var (
+		cancelled atomic.Bool
+		outcome   atomic.Pointer[dialOutcome]
+	)
 
 	progress := dialog.NewCustom("Connecting", "Cancel",
-		widget.NewLabel(connectStatusLabel(n)), h.win)
-	// A dial that cannot be escaped is worse than a slow one: until this
-	// existed, a serial open that parked in the driver left a modal over the
-	// whole window and the only exit was killing the process. Hot-plugging an
-	// adapter on a crash cart is enough to produce that.
+		widget.NewLabel(connectStatusLabel(folder, n, h.tree.Tree())), h.win)
 	progress.SetOnClosed(func() {
-		if settled.CompareAndSwap(false, true) {
+		if o := outcome.Load(); o != nil {
+			if o.err != nil {
+				log.Printf("[dial] %v", o.err)
+				title := o.dialNode.Label()
+				if title == "" {
+					title = "Session"
+				}
+				ed := dialog.NewError(o.err, h.win)
+				ed.SetOnClosed(func() {
+					h.launchTerminalTitled(title, folder, o.dialNode)
+				})
+				ed.Show()
+				return
+			}
+			if persist != nil {
+				persist(o.dialNode)
+			}
+			h.mountTerminal(o.dialNode, o.tp)
+			return
+		}
+		if cancelled.CompareAndSwap(false, true) {
 			log.Printf("[dial] cancelled by operator: %s", n.Target())
 			cancel()
 		}
 	})
 	progress.Show()
 
-	// Pointer so AuthPrompt can attach a vault credential name onto the node
-	// used for the eventual inventory write.
 	node := n
-
 	opts := sessiondial.Options{
 		Credentials:   h.lookup,
 		HostKeyPrompt: h.promptHostKey,
@@ -2529,17 +2762,30 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 		Log: log.Printf,
 	}
 
-	// Dial off the UI goroutine. A device slow to answer, or a host-key
-	// prompt waiting on a click, must not freeze the window -- and the
-	// prompt cannot be answered by a frozen one.
 	go func() {
 		defer cancel()
 
 		dialNode := node
-		tp, err := sessiondial.Connect(ctx, dialNode, opts)
-		if err != nil && auvik.ShouldTryTunnel(dialNode, err, h.base.AuvikAutoTunnel) {
-			log.Printf("[auvik] direct dial failed, trying tunnel: %v", err)
+		home := ui.GetAppHome()
+		dialNode = auvik.EnrichTunnelDomain(home, folder, dialNode, h.tree.Tree())
+		var tp term.Transport
+		var err error
+		if auvik.ShouldUseTunnelFirst(dialNode, home) {
+			domain := auvik.ResolveTunnelDomain(home, dialNode)
+			log.Printf("[auvik] AuvikTunnel first for %s (domain %s)", dialNode.Target(), domain)
+			synclog.Info(home, "auvik-tunnel", domain, "connect "+dialNode.Label(), dialNode.Target())
 			tp, err = h.tryAuvikTunnelConnect(ctx, dialNode, opts)
+		} else {
+			tp, err = sessiondial.Connect(ctx, dialNode, opts)
+			if err != nil && auvik.ShouldTryTunnel(dialNode, err, h.base.AuvikAutoTunnel || h.auvikUseTunnelDefault(), home) {
+				log.Printf("[auvik] direct dial failed, trying tunnel: %v", err)
+				synclog.Warn(home, "auvik-tunnel", auvik.ResolveTunnelDomain(home, dialNode),
+					"direct dial failed, trying tunnel", err.Error())
+				tp, err = h.tryAuvikTunnelConnect(ctx, dialNode, opts)
+			} else if err != nil && auvik.IsAuvikManaged(dialNode, home) {
+				synclog.Error(home, "auvik-tunnel", auvik.ResolveTunnelDomain(home, dialNode),
+					"connect failed (tunnel not used)", err.Error())
+			}
 		}
 		if err != nil && folder != "" && strings.TrimSpace(node.ConsoleFallback) != "" {
 			if fb, ok := h.tree.Tree().SessionInFolder(folder, node.ConsoleFallback); ok {
@@ -2551,44 +2797,20 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 			}
 		}
 		fyne.Do(func() {
-			if !settled.CompareAndSwap(false, true) {
-				// The operator cancelled and has moved on. Connect closes
-				// an abandoned transport itself, so there is nothing to
-				// clean up here and nothing to report -- raising an error
-				// dialog now would hand them back their own decision as a
-				// fault.
-				return
-			}
-			progress.Hide()
-			if err != nil {
-				log.Printf("[dial] %v", err)
-				// After a failed handshake (auth, host key, unreachable), put
-				// the session form back up once the error is acknowledged so
-				// the operator can fix the password or settings.
-				title := dialNode.Label()
-				if title == "" {
-					title = "Session"
+			if cancelled.Load() {
+				if tp != nil {
+					_ = tp.Close()
+					h.releaseAuvikTunnelForNode(dialNode)
 				}
-				ed := dialog.NewError(err, h.win)
-				ed.SetOnClosed(func() {
-					h.launchTerminalTitled(title, folder, dialNode)
-				})
-				ed.Show()
 				return
 			}
-			// Persist after dial so password-link Credential is kept, and so
-			// New session (Add) still works via the tree's apply callback.
-			if persist != nil {
-				persist(dialNode)
-			}
-			h.mountTerminal(dialNode, tp)
+			outcome.Store(&dialOutcome{err: err, tp: tp, dialNode: dialNode})
+			progress.Hide()
 		})
 	}()
 }
 
-// connectSavingPassword stores a form-typed password in the vault (unlocking
-// first if needed) before dialling, so AuthPrompt is not the only save path.
-// The session form password field is yaml:"-" and was previously discarded.
+
 func (h *host) connectSavingPassword(folder, oldLabel string, n sessions.Node, persist func(sessions.Node)) {
 	pw := strings.TrimSpace(n.Password)
 	if pw == "" {
@@ -2630,7 +2852,107 @@ func (h *host) canAutoLogin(n sessions.Node) bool {
 	return strings.TrimSpace(c.Password) != "" || strings.TrimSpace(c.KeyPath) != ""
 }
 
-// mountTerminal builds the session and hands it to the shell. UI goroutine.
+
+// reconnectTerminal redials into an existing terminal tab (new Auvik tunnel / SSH).
+func (h *host) reconnectTerminal(sess *ui.Session, inst *ui.Instance, folder string, n sessions.Node) {
+	if sess == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+
+	type dialOutcome struct {
+		err      error
+		tp       term.Transport
+		dialNode sessions.Node
+	}
+	var (
+		cancelled atomic.Bool
+		outcome   atomic.Pointer[dialOutcome]
+	)
+
+	progress := dialog.NewCustom("Reconnecting", "Cancel",
+		widget.NewLabel("Reconnecting "+n.Label()+"…"), h.win)
+	progress.SetOnClosed(func() {
+		if o := outcome.Load(); o != nil {
+			if o.err != nil {
+				log.Printf("[reconnect] %v", o.err)
+				dialog.ShowError(o.err, h.win)
+				if inst != nil {
+					inst.SetStatus(n.Target() + " — Disconnected")
+				}
+				return
+			}
+			if err := sess.Reattach(o.tp); err != nil {
+				_ = o.tp.Close()
+				h.releaseAuvikTunnelForNode(o.dialNode)
+				dialog.ShowError(err, h.win)
+				return
+			}
+			if inst != nil {
+				inst.SetStatus(n.Target() + " — Connected")
+			}
+			h.refreshOpsChrome()
+			h.shell.EnsureTerminalFocus()
+			log.Printf("[reconnect] ok %s", n.Target())
+			return
+		}
+		if cancelled.CompareAndSwap(false, true) {
+			log.Printf("[reconnect] cancelled: %s", n.Target())
+			cancel()
+		}
+	})
+	progress.Show()
+	if inst != nil {
+		inst.SetStatus(n.Target() + " — Reconnecting")
+	}
+
+	node := n
+	opts := sessiondial.Options{
+		Credentials:   h.lookup,
+		HostKeyPrompt: h.promptHostKey,
+		OnNewHostKey: func(host, keyType, fingerprint string) {
+			log.Printf("[hostkey] trusted on first contact: %s %s %s", host, keyType, fingerprint)
+		},
+		AuthPrompt: func(prompt string, echo bool) (string, error) {
+			return h.promptSecret(folder, n.Label(), &node, prompt, echo)
+		},
+		Log: log.Printf,
+	}
+
+	go func() {
+		defer cancel()
+		dialNode := node
+		home := ui.GetAppHome()
+		dialNode = auvik.EnrichTunnelDomain(home, folder, dialNode, h.tree.Tree())
+		h.releaseAuvikTunnelForNode(dialNode)
+		var tp term.Transport
+		var err error
+		if auvik.ShouldUseTunnelFirst(dialNode, home) {
+			domain := auvik.ResolveTunnelDomain(home, dialNode)
+			log.Printf("[auvik] reconnect tunnel first for %s (%s)", dialNode.Target(), domain)
+			synclog.Info(home, "auvik-tunnel", domain, "reconnect "+dialNode.Label(), dialNode.Target())
+			tp, err = h.tryAuvikTunnelConnect(ctx, dialNode, opts)
+		} else {
+			tp, err = sessiondial.Connect(ctx, dialNode, opts)
+			if err != nil && auvik.ShouldTryTunnel(dialNode, err, h.base.AuvikAutoTunnel || h.auvikUseTunnelDefault(), home) {
+				tp, err = h.tryAuvikTunnelConnect(ctx, dialNode, opts)
+			}
+		}
+		fyne.Do(func() {
+			if cancelled.Load() {
+				if tp != nil {
+					_ = tp.Close()
+					h.releaseAuvikTunnelForNode(dialNode)
+				}
+				return
+			}
+			outcome.Store(&dialOutcome{err: err, tp: tp, dialNode: dialNode})
+			progress.Hide()
+		})
+	}()
+}
+
+
 func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 	// The settings dance, and the reason it is a dance: Settings are
 	// process-wide, and the terminal widget reads FontSize and
@@ -2657,6 +2979,7 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 	if err := sess.Attach(tp); err != nil {
 		log.Printf("[attach] %v", err)
 		tp.Close()
+		h.releaseAuvikTunnelForNode(n)
 		dialog.ShowError(err, h.win)
 		return
 	}
@@ -2676,6 +2999,8 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 	})
 
 	captureBtn := ui.TipIconButtonLow("Start or stop capturing this session to a transcript", theme.MediaRecordIcon(), nil)
+	reconnectBtn := ui.TipIconButtonLow("Reconnect this session (new tunnel/SSH)", theme.ViewRefreshIcon(), nil)
+	sftpBtn := ui.TipIconButtonLow("Transfer files (SFTP) on this SSH session", theme.FolderOpenIcon(), nil)
 	sessionMenuBtn := ui.TipButtonLabeled("Session", theme.DocumentIcon(), func() {})
 	refreshCaptureTip := func() {
 		if sess.IsLogging() {
@@ -2707,12 +3032,13 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 		Applet: &termApplet{
 			content:  content,
 			sess:     sess,
+			node:     n,
 			folder:   folder,
 			customer: customer,
 			host:     n.Host,
 		},
 		Focus:   sess,
-		Actions: []fyne.CanvasObject{sessionMenuBtn, captureBtn},
+		Actions: []fyne.CanvasObject{reconnectBtn, sftpBtn, sessionMenuBtn, captureBtn},
 		// The terminal resolves its own canvas for focus-on-click and for
 		// its context menu, and the driver's cache cannot tell it that it
 		// has moved. Without this a detached session goes deaf on the
@@ -2724,6 +3050,9 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 		// full-screen application redraws into a corner.
 		OnPlaced: sess.ResyncSize,
 		OnClose: func() {
+			// Drop the Auvik Ensure lease for this tab. App quit still
+			// runs StopAll afterward as a safety net for orphans.
+			h.releaseAuvikTunnelForNode(n)
 			if err := sess.Close(); err != nil {
 				log.Printf("[close] %v", err)
 			}
@@ -2746,8 +3075,22 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 		},
 	})
 	sessionMenuBtn.OnTapped = func() {
-		h.showSessionMenu(sessionMenuBtn, sess, inst, n.Label())
+		h.showSessionMenu(sessionMenuBtn, sess, inst, n, folder)
 	}
+	sftpBtn.OnTapped = func() {
+		h.openSFTPTab(sess, "SFTP - "+n.Label())
+	}
+	doReconnect := func() { h.reconnectTerminal(sess, inst, folder, n) }
+	reconnectBtn.OnTapped = doReconnect
+	sess.SetReconnectRequestHandler(func() {
+		dialog.ShowConfirm("Reconnect?",
+			"Session is disconnected. Reconnect to "+n.Label()+"?",
+			func(ok bool) {
+				if ok {
+					doReconnect()
+				}
+			}, h.win)
+	})
 	inst.SetStatus(n.Target())
 
 	// The terminal's right-click menu carries the same two bulk actions, for
@@ -2806,6 +3149,7 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 type termApplet struct {
 	content  fyne.CanvasObject
 	sess     *ui.Session
+	node     sessions.Node
 	folder   string
 	customer string
 	host     string
@@ -3830,6 +4174,8 @@ func (h *host) showSettings() {
 			h.refreshOpenTerminalScrollback()
 			if h.auvikTunnels != nil {
 				h.auvikTunnels.BinPath = h.base.AuvikTunnelPath
+				h.auvikTunnels.SetAppHome(ui.GetAppHome())
+				h.auvikTunnels.SetCredentials(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
 			}
 			h.startAuvikPeriodicSync()
 		},

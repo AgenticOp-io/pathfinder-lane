@@ -161,9 +161,7 @@ func nodeFromDevice(d Device, opts SyncOptions) sessions.Node {
 	n.AuvikDomain = strings.TrimSpace(opts.Tenant.Name)
 	n.IntegrationSource = mspsync.SourceAuvik
 	n.ExternalDeviceID = strings.TrimSpace(d.ID)
-	if opts.UseTunnelDefault {
-		n.AuvikUseTunnel = true
-	}
+	n.AuvikUseTunnel = true
 	n.Vendor = strings.TrimSpace(d.Vendor)
 	n.DeviceType = strings.TrimSpace(d.DeviceType)
 	return n.Normalize()
@@ -210,6 +208,10 @@ func mergeAuvikAuthority(existing, from sessions.Node, imp ImportOptions) (sessi
 		changed = true
 	}
 	if from.AuvikUseTunnel && !out.AuvikUseTunnel {
+		out.AuvikUseTunnel = true
+		changed = true
+	}
+	if from.IntegrationSource == mspsync.SourceAuvik && !out.AuvikUseTunnel {
 		out.AuvikUseTunnel = true
 		changed = true
 	}
