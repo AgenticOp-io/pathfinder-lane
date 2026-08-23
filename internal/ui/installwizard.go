@@ -138,8 +138,8 @@ func ShowInstallWizard(w fyne.Window, opts InstallWizardOptions) {
 			}
 			bodySlot.Objects = []fyne.CanvasObject{
 				container.NewVBox(
-					widget.NewLabel("Welcome! This copies PathfinderSSH to your user folder,\n"+
-						"creates Desktop and Start Menu shortcuts, and sets up sign-in."),
+					widget.NewLabel("Welcome! This copies PathfinderSSH MSP to your user folder\n"+
+						"(pathfinder, pfseed, installer tools), creates shortcuts, and sets up sign-in."),
 					widget.NewLabel("Free software (GPL-3.0). Source: github.com/AgenticOp-io/pathfinderssh-msp"+ver),
 					widget.NewLabel("Step 1 of 3 — Welcome"),
 				),

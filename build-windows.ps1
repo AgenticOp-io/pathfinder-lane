@@ -120,6 +120,9 @@ function Test-Gui([string]$app) {
 }
 
 $select = $Targets
+# When invoked from another script as -Targets "pathfinder,pfseed", PowerShell passes
+# one array element; split commas so discovery matches interactive CLI usage.
+$select = @($select | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $list = @()
 if ($select.Count -eq 1 -and $select[0] -eq "all") {
     $list = $all
