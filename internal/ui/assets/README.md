@@ -27,4 +27,4 @@ Replace / regenerate the `icon-*.png` files in `cmd/pathfinder/winres/` (max 256
 go-winres make --in cmd/pathfinder/winres/winres.json --out cmd/pathfinder/rsrc --arch amd64,arm64
 ```
 
-`products/pathfinder-msp/Update-Install.ps1` runs that step when `go-winres` is available.
+`build-windows.ps1` can run `go-winres` when the tool is on PATH.

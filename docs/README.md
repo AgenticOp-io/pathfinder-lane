@@ -68,5 +68,5 @@ Anonymized mockups (no real customer names): [images/README.md](images/README.md
 
 | Path | Contents |
 | --- | --- |
-| `products/pathfinder-msp/` | `Install.ps1`, `Update-Install.ps1`, Windows binaries |
+| `dist/windows/` | `pfinstall.exe` installer, bundled Windows binaries |
 | `products/pathfinder-msp/deploy/entra/` | Entra app registration script (optional) |

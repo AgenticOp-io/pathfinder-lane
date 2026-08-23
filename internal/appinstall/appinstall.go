@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/scottpeterman/pathfinderssh/internal/product"
 )
@@ -53,12 +54,18 @@ func RunningInstalled() bool {
 // It does nothing when already running from the install location.
 // copied is true when files were written.
 func Ensure() (destExe string, copied bool, err error) {
+	return EnsureFrom("")
+}
+
+// EnsureFrom copies the tool bundle from srcDir into BinDir. When srcDir is empty,
+// the directory of the running executable is used.
+func EnsureFrom(srcDir string) (destExe string, copied bool, err error) {
 	destExe = ExePath()
 	src, err := osExecutable()
 	if err != nil {
 		return "", false, err
 	}
-	if SameFile(src, destExe) {
+	if SameFile(src, destExe) && strings.TrimSpace(srcDir) == "" {
 		// Still refresh LICENSE/NOTICE when already installed.
 		if err := InstallLegalDocs(BinDir()); err != nil {
 			return destExe, false, fmt.Errorf("install legal docs: %w", err)
@@ -68,15 +75,18 @@ func Ensure() (destExe string, copied bool, err error) {
 	if err := os.MkdirAll(BinDir(), 0o755); err != nil {
 		return "", false, err
 	}
-	srcDir := filepath.Dir(src)
-	bundleCopied, err := CopyToolBundle(srcDir, BinDir())
+	bundleDir, err := resolveBundleDir(src, srcDir)
+	if err != nil {
+		return "", false, err
+	}
+	bundleCopied, err := CopyToolBundle(bundleDir, BinDir())
 	if err != nil {
 		return "", false, err
 	}
 
 	needCopy := true
 	if stD, err := os.Stat(destExe); err == nil {
-		mainSrc := filepath.Join(srcDir, exeName("pathfinder"))
+		mainSrc := filepath.Join(bundleDir, exeName("pathfinder"))
 		if stS, err := os.Stat(mainSrc); err == nil {
 			needCopy = stS.Size() != stD.Size() || stS.ModTime().After(stD.ModTime())
 		} else if isPathfinderExe(src) {
@@ -88,7 +98,7 @@ func Ensure() (destExe string, copied bool, err error) {
 		}
 	}
 	if needCopy {
-		mainSrc := filepath.Join(srcDir, exeName("pathfinder"))
+		mainSrc := filepath.Join(bundleDir, exeName("pathfinder"))
 		if st, err := os.Stat(mainSrc); err == nil && !st.IsDir() {
 			if err := copyFile(mainSrc, destExe); err != nil {
 				return "", false, fmt.Errorf("install pathfinder: %w", err)
@@ -100,7 +110,7 @@ func Ensure() (destExe string, copied bool, err error) {
 			}
 			copied = true
 		} else if _, err := os.Stat(destExe); err != nil {
-			return "", false, fmt.Errorf("pathfinder.exe not found beside %s — build the app bundle first", src)
+			return "", false, fmt.Errorf("pathfinder.exe not found in %s — place the full bundle beside pfinstall.exe or use -from", bundleDir)
 		}
 	}
 	if bundleCopied {
@@ -140,4 +150,22 @@ func copyFile(src, dst string) error {
 	}
 	_ = os.Remove(dst)
 	return os.Rename(tmp, dst)
+}
+
+func resolveBundleDir(exe, override string) (string, error) {
+	if override = strings.TrimSpace(override); override != "" {
+		abs, err := filepath.Abs(override)
+		if err != nil {
+			return "", err
+		}
+		st, err := os.Stat(abs)
+		if err != nil {
+			return "", fmt.Errorf("bundle dir: %w", err)
+		}
+		if !st.IsDir() {
+			return "", fmt.Errorf("bundle dir is not a directory: %s", abs)
+		}
+		return abs, nil
+	}
+	return filepath.Dir(exe), nil
 }

@@ -37,6 +37,6 @@ Agents push to `candidate/*` only — merge to `main` is human / PR.
 | --- | --- |
 | MSP integrations, auth, UI chrome | this repo (`pathfinderssh-msp`) |
 | Portable crawl / vault / terminal fixes | PR to `scottpeterman/pathfinderssh` |
-| Installers / `Install.ps1` | `products/pathfinder-msp/` |
+| Installers / `pfinstall.exe` | `cmd/pfinstall`, `dist/windows/` |
 
 Match security non-negotiables in [SECURITY.md](../SECURITY.md). UI roadmap: [ROADMAP-FRONTEND.md](../ROADMAP-FRONTEND.md).

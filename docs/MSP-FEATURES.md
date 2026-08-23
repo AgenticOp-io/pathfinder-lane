@@ -80,7 +80,7 @@ Each inventory/vault dialog includes a **customer folder picker** that fuzzy-mat
 
 ![Install wizard](images/msp-install-wizard.svg)
 
-Graphical first-run and `Install.ps1 -install-gui`:
+Graphical first-run and `pfinstall.exe -install-gui`:
 
 - **Solo** — local vault only; **no integration UI**
 - **Microsoft 365** — Entra OIDC; unlocks full MSP stack

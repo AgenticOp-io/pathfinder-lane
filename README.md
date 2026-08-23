@@ -14,12 +14,19 @@ PathfinderSSH MSP is a derivative work. Upstream owns the core terminal/crawl/ma
 
 ## Quick start
 
-```powershell
-cd products\pathfinder-msp
-.\Install.ps1
+Build or download the Windows bundle, then run the installer:
+
+```cmd
+dist\windows\pfinstall.exe
 ```
 
-Pick **Solo**, **Microsoft 365**, or **Google** in the graphical installer.  
+Or silent install with solo mode (no cloud sign-in):
+
+```cmd
+dist\windows\pfinstall.exe -install -setup solo
+```
+
+Pick **Solo**, **Microsoft 365**, or **Google** in the graphical wizard when you double-click `pfinstall.exe`.
 Full guide: [docs/INSTALL.md](docs/INSTALL.md)
 
 ## Documentation

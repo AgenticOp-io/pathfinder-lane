@@ -45,4 +45,4 @@ Upstream engine internals: [UPSTREAM.md](UPSTREAM.md)
 
 ## MSP packaging
 
-`products/pathfinder-msp/Install.ps1` — copies binary to `%LOCALAPPDATA%\PathfinderSSH-MSP\`
+`cmd/pfinstall` / `pfinstall.exe` — copies bundle to `%LOCALAPPDATA%\PathfinderSSH-MSP\`

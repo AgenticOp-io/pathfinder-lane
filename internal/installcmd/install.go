@@ -13,14 +13,16 @@ import (
 
 // Options configures a non-interactive install from the command line.
 type Options struct {
-	Setup  string
-	Enroll bool
-	Home   string
+	Setup     string
+	Enroll    bool
+	Home      string
+	BundleDir string // optional folder containing pathfinder.exe, pfseed.exe, ...
+	Update    bool   // reinstall / refresh binaries (same as install; documents intent)
 }
 
 // Run copies the tool bundle to AppData, creates shortcuts, and optionally configures sign-in.
 func Run(opts Options) (destExe string, err error) {
-	dest, copied, err := appinstall.Ensure()
+	dest, copied, err := appinstall.EnsureFrom(opts.BundleDir)
 	if err != nil {
 		return "", err
 	}
@@ -32,6 +34,8 @@ func Run(opts Options) (destExe string, err error) {
 	}
 	if copied {
 		fmt.Println("Installed to", dest)
+	} else if opts.Update {
+		fmt.Println("Already up to date at", dest)
 	} else {
 		fmt.Println("Already installed at", dest)
 	}
@@ -55,7 +59,7 @@ func applySetup(opts Options) error {
 		return nil
 	}
 	if !opts.Enroll {
-		fmt.Println("Run Pathfinder or pfinstall -install-gui to finish", setup, "sign-in setup.")
+		fmt.Println("Run pfinstall.exe (GUI) or pfinstall.exe -install-gui to finish", setup, "sign-in setup.")
 		return nil
 	}
 	auth := mspauth.NewAuthenticator(home)

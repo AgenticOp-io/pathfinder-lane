@@ -27,7 +27,7 @@ Work: https://github.com/AgenticOp-io/pathfinderssh-msp
 | Cursor account / Cloud Agents API | `internal/cursorapi` |
 | Troubleshoot addon (gated) | Settings → Ops enable; Ops / toolbar → Troubleshoot agent modal |
 | IT Glue password import + session link | `internal/itglue` + Settings → Tools |
-| GUI install wizard (Solo / M365 / Google) | `Install.ps1 -install-gui`, `cmd/pfinstall` |
+| GUI install wizard (Solo / M365 / Google) | `pfinstall.exe`, `pfinstall.exe -install-gui`, `cmd/pfinstall` |
 | OIDC sign-in (Entra + Google) | `internal/idp`, `mspauth`, `mspenroll` |
 
 ## Still open / polish

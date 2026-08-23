@@ -8,7 +8,7 @@
 | **Microsoft 365** | Entra ID, Conditional Access, Intune | OIDC + PKCE (system browser) |
 | **Google** | Google Workspace | OIDC + PKCE (system browser) |
 
-Configure at install (`Install.ps1`, `-install-gui`) or later:
+Configure at install (`pfinstall.exe`, `-install-gui`) or later:
 
 ```powershell
 pathfinder -setup solo

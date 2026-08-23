@@ -153,6 +153,8 @@ foreach ($app in $list) {
     }
 
     $gui = Test-Gui $app
+    # pfinstall is the primary CLI installer — keep a console for -install / -update output.
+    if ($app -eq "pfinstall") { $gui = $false }
     if ($gui) { $kind = "gui" } else { $kind = "cli" }
 
     $ld = @()

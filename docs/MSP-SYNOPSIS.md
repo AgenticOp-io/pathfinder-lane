@@ -48,11 +48,11 @@ User data: `%USERPROFILE%\.pathfinderssh\` (sessions, vault, maps, scripts, sett
 
 ### Install & sign-in
 
-- **GUI installer** — `Install.ps1` → wizard: Solo / Microsoft 365 / Google
+- **GUI installer** — `pfinstall.exe` → wizard: Solo / Microsoft 365 / Google
 - **Solo** — no cloud OAuth; local enrollment only
 - **Microsoft 365 / Google** — OIDC + PKCE in system browser; enrollment file + per-user session
 - Packages: `internal/idp`, `internal/mspenroll`, `internal/mspauth`
-- Tools: `pathfinder -install-gui`, `cmd/pfinstall`, `cmd/pfenroll`
+- Tools: `pfinstall.exe`, `pathfinder -install-gui`, `cmd/pfenroll`
 
 ### MSP integrations (cohesive stack — cloud sign-in only)
 
@@ -87,7 +87,7 @@ See [SECURITY.md](../SECURITY.md): vault-only secrets, host-key fail-closed, rea
 
 ```
 cmd/pathfinder/     Main GUI application
-cmd/pfinstall/      GUI installer only
+cmd/pfinstall/      Primary installer (GUI + CLI)
 cmd/pfenroll/       Enrollment wizard only
 cmd/pfvault/        Vault CLI
 internal/auvik/     Auvik API client + sync
