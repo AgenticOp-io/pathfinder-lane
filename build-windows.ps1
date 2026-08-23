@@ -37,15 +37,18 @@
 # so the script must not invent one. With neither -Version nor git available it
 # passes no -X at all and lets the source constant stand.
 #
-# Signing: nothing here signs anything. Store-published builds are re-signed by
-# Microsoft; a direct download needs its own certificate.
+# Build dist\windows\*.exe then optionally install:
+#   .\build-windows.ps1 -Targets installers
+#   .\build-windows.ps1 -Install -Setup solo
 
 param(
     [string[]]$Targets = @("all"),
     [bool]$Strip       = $true,
     [switch]$Console,
     [string]$Version   = "",
-    [string]$Tags      = ""
+    [string]$Tags      = "",
+    [switch]$Install,
+    [string]$Setup     = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -171,4 +174,20 @@ Get-ChildItem $Out -Filter *.exe | Select-Object Name, Length, FullName
 if ($failed.Count -gt 0) {
     Write-Host (">> FAILED: " + ($failed -join ", "))
     exit 1
+}
+
+if ($Install) {
+    $installer = Join-Path $Out "pfinstall.exe"
+    if (-not (Test-Path $installer)) {
+        Write-Host "!! pfinstall.exe missing in $Out"
+        exit 1
+    }
+    $args = @("-install")
+    if (-not [string]::IsNullOrWhiteSpace($Setup)) {
+        $args += "-setup"
+        $args += $Setup.Trim()
+    }
+    Write-Host ">> Installing via pfinstall.exe $($args -join ' ')"
+    & $installer @args
+    exit $LASTEXITCODE
 }

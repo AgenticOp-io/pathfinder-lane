@@ -32,6 +32,15 @@ func CreateShortcuts(exe string) error {
 	if desktop != "" {
 		_ = writeShortcut(filepath.Join(desktop, lnk), exe, work)
 	}
+	// Installer shortcut when pfinstall is bundled.
+	inst := filepath.Join(filepath.Dir(exe), exeName("pfinstall"))
+	if st, err := os.Stat(inst); err == nil && !st.IsDir() {
+		instLnk := "Install PathfinderSSH.lnk"
+		_ = writeShortcut(filepath.Join(startMenu, instLnk), inst, work)
+		if desktop != "" {
+			_ = writeShortcut(filepath.Join(desktop, instLnk), inst, work)
+		}
+	}
 	return removeObsoleteShortcuts()
 }
 
@@ -43,7 +52,7 @@ func removeShortcuts() error {
 		_ = os.Remove(filepath.Join(d, lnk))
 	}
 	// Also clear the pre-MSP shortcut names so upgrades do not leave two icons.
-	for _, old := range []string{"PathfinderSSH.lnk"} {
+	for _, old := range []string{"PathfinderSSH.lnk", "Install PathfinderSSH.lnk"} {
 		_ = os.Remove(filepath.Join(startMenuDir(), old))
 		if d := desktopDir(); d != "" {
 			_ = os.Remove(filepath.Join(d, old))

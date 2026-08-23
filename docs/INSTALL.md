@@ -3,63 +3,85 @@
 ## Graphical install (recommended)
 
 ```powershell
-cd products\pathfinder-msp
+cd engines\pathfinderssh
 .\Install.ps1
 ```
 
-Or launch the wizard from an existing binary:
+Or double-click **Install PathfinderSSH** in Start Menu after a prior install.
+
+Other graphical entry points:
 
 ```powershell
+.\dist\windows\pfinstall.exe
+.\dist\windows\pfinstall.exe -install-gui -setup o365
 pathfinder -install-gui
 ```
 
-![Install wizard](images/msp-install-wizard.svg)
-
-Pick **Solo**, **Microsoft 365**, or **Google**. The installer copies `pathfinder.exe` to:
-
-`%LOCALAPPDATA%\PathfinderSSH-MSP\bin\pathfinder.exe`
-
-Shortcuts are created under Start Menu → PathfinderSSH MSP.
-
-## Silent / scripted install
+## Silent / command-line install
 
 ```powershell
-.\Install.ps1 -setup solo
-.\Install.ps1 -setup o365
-.\Install.ps1 -setup google
+# Build installer bundle (pathfinder, pfseed, pfinstall, pfenroll)
+.\build-windows.ps1 -Targets pathfinder,pfseed,pfinstall,pfenroll
+
+# Silent install to %LOCALAPPDATA%\PathfinderSSH-MSP\bin\
+.\dist\windows\pfinstall.exe -install
+.\dist\windows\pfinstall.exe -install -setup solo
+.\Install.ps1 -Setup solo
+
+# Same via pathfinder binary
+pathfinder -install
+pathfinder -install -setup solo
 ```
 
-CLI after install:
+Cloud sign-in during CLI install (opens browser):
 
 ```powershell
-pathfinder -setup solo
-pathfinder -setup o365
-pathfinder -setup google
+pfinstall.exe -install -setup o365 -enroll
 ```
 
-## Update
+Uninstall:
 
 ```powershell
-cd products\pathfinder-msp
+pfinstall.exe -uninstall
+.\Install.ps1 -Uninstall
+pathfinder -uninstall
+```
+
+## Update (rebuild + reinstall)
+
+```powershell
 .\Update-Install.ps1
+.\Update-Install.ps1 -Setup solo
+.\build-windows.ps1 -Targets pathfinder,pfseed,pfinstall,pfenroll -Install
 ```
 
 Preserves `%USERPROFILE%\.pathfinderssh\` data (sessions, vault, maps).
 
-## Build from source
-
-```bash
-go build -ldflags "-s -w -H windowsgui" -o pathfinder.exe ./cmd/pathfinder
-```
-
-Windows requires `-H windowsgui` so no console window appears beside the GUI.
-
-## Paths
+## Installed layout
 
 | Path | Contents |
 | --- | --- |
-| `%LOCALAPPDATA%\PathfinderSSH-MSP\` | Installed binary, enrollment JSON |
-| `%USERPROFILE%\.pathfinderssh\` | sessions.yaml, vault, maps, scripts, settings |
+| `%LOCALAPPDATA%\PathfinderSSH-MSP\bin\pathfinder.exe` | Main app |
+| `%LOCALAPPDATA%\PathfinderSSH-MSP\bin\pfseed.exe` | Headless seeds / Auvik sync |
+| `%LOCALAPPDATA%\PathfinderSSH-MSP\bin\pfinstall.exe` | Installer wizard |
+| `%LOCALAPPDATA%\PathfinderSSH-MSP\bin\pfenroll.exe` | Org enrollment (super admin) |
+
+Shortcuts: **PathfinderSSH MSP** (app), **Install PathfinderSSH** (wizard).
+
+## Build from source
+
+```powershell
+.\build-windows.ps1 -Targets pathfinder,pfseed,pfinstall,pfenroll
+```
+
+GUI apps use `-H windowsgui` automatically (no extra console window).
+
+## User data paths
+
+| Path | Contents |
+| --- | --- |
+| `%LOCALAPPDATA%\PathfinderSSH-MSP\` | Install root, enrollment JSON |
+| `%USERPROFILE%\.pathfinderssh\` | sessions.yaml, vault, maps, settings |
 | `%USERPROFILE%\.pathfinderssh\maps\<Customer>\` | Per-customer topology JSON |
 
 ## First launch
@@ -67,7 +89,7 @@ Windows requires `-H windowsgui` so no console window appears beside the GUI.
 1. Unlock or create **vault** (all modes)
 2. Optional: Settings → Tools → Auvik / IT Glue
 3. Import SecureCRT or sync Auvik
-4. Select a session → **Launch**
+4. Select a session → connect
 
 ## Cloud sign-in setup (first time)
 
@@ -85,8 +107,6 @@ Windows requires `-H windowsgui` so no console window appears beside the GUI.
 1. Google Cloud Console → Credentials → OAuth client ID (Desktop or Web + redirect above)
 2. Copy Client ID into the wizard or `pathfinder -setup google`
 
-Change mode later: delete `msp-enrollment.json` and re-run `pathfinder -setup solo|o365|google`. Sessions and vault under `~\.pathfinderssh` are kept.
+Change mode later: delete `msp-enrollment.json` and re-run install with `-setup solo|o365|google`. Sessions and vault under `~\.pathfinderssh` are kept.
 
-Standalone wizard: `go run ./cmd/pfinstall` or `pathfinder -install-gui`.
-
-Full auth detail: [AUTH.md](AUTH.md). Optional Entra script: `products/pathfinder-msp/deploy/entra/`.
+Full auth detail: [AUTH.md](AUTH.md).
