@@ -1,6 +1,7 @@
 package auvik
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -110,7 +111,8 @@ func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, rem
 	spec := fmt.Sprintf("tcp:%d:%s:%d:%s", wantLocal, deviceIP, remotePort, domain)
 	cmd := exec.CommandContext(ctx, bin, spec)
 	cmd.Stdout = nil
-	cmd.Stderr = nil
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("start AuvikTunnel: %w", err)
 	}
@@ -130,6 +132,10 @@ func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, rem
 		time.Sleep(200 * time.Millisecond)
 	}
 	_ = cmd.Process.Kill()
+	msg := strings.TrimSpace(stderr.String())
+	if msg != "" {
+		return 0, fmt.Errorf("AuvikTunnel did not open local port %d within 45s: %s", wantLocal, msg)
+	}
 	return 0, fmt.Errorf("AuvikTunnel did not open local port %d within 45s", wantLocal)
 }
 

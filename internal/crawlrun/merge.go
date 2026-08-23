@@ -16,22 +16,29 @@ type MergeSuggestion struct {
 // MergeSuggestions returns heuristic duplicate-device hints for the crawl table.
 func MergeSuggestions(rows []DeviceRow) []MergeSuggestion {
 	var out []MergeSuggestion
-	byIdentity := map[string][]DeviceRow{}
+	byIP := map[string][]DeviceRow{}
 	for _, r := range rows {
-		id := strings.TrimSpace(r.Identity)
-		if id == "" {
+		ip := strings.TrimSpace(r.Identity)
+		if ip == "" {
 			continue
 		}
-		byIdentity[id] = append(byIdentity[id], r)
+		byIP[ip] = append(byIP[ip], r)
 	}
-	for id, group := range byIdentity {
+	for ip, group := range byIP {
 		if len(group) < 2 {
+			continue
+		}
+		names := map[string]bool{}
+		for _, r := range group {
+			names[r.Display()] = true
+		}
+		if len(names) < 2 {
 			continue
 		}
 		a, b := group[0], group[1]
 		out = append(out, MergeSuggestion{
-			IdentityA: id,
-			IdentityB: id,
+			IdentityA: ip,
+			IdentityB: ip,
 			NameA:     a.Display(),
 			NameB:     b.Display(),
 			Reason:    "same address, different names — review for duplicate device",

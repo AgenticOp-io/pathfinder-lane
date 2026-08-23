@@ -2049,6 +2049,10 @@ func (h *host) importFromAuvik() {
 			})
 			h.tree.SetTree(tr)
 			h.saveTree(tr)
+			if m, err := auvik.LoadTenantMap(ui.GetAppHome()); err == nil {
+				m.Set(tenant.ID, customer)
+				_ = auvik.SaveTenantMap(ui.GetAppHome(), m)
+			}
 			st := auvik.ImportStats{
 				Imported: syncRes.Created,
 				Skipped:  syncRes.Skipped,
@@ -2160,16 +2164,6 @@ func (h *host) auvikImportDefaults() auvik.ImportOptions {
 	}
 }
 
-func (h *host) auvikSyncDefaults(tenant auvik.Tenant) auvik.SyncOptions {
-	return auvik.SyncOptions{
-		ImportOptions:     h.auvikImportDefaults(),
-		Tenant:            tenant,
-		CustomerName:      h.resolveMSPCustomer(tenant.Name),
-		MoveToAuvikFolder: true,
-		UseTunnelDefault:  h.base.AuvikAutoTunnel,
-	}
-}
-
 func (h *host) runAuvikSyncAll(interactive bool) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -2191,47 +2185,51 @@ func (h *host) runAuvikSyncAll(interactive bool) {
 			if agg.Changed {
 				log.Printf("[auvik] background sync: %s", agg.Summary)
 			}
+			if h.shell != nil && h.shell.SummaryLabel() != nil {
+				note := "Auvik sync OK"
+				if agg.Changed {
+					note = "Auvik sync: " + strings.Split(agg.Summary, "\n")[0]
+				}
+				h.shell.SummaryLabel().SetText(note)
+			}
 		})
 	}()
 }
 
+func (h *host) auvikResolveCustomer(tenant auvik.Tenant) string {
+	return auvik.ResolveCustomer(
+		ui.GetAppHome(),
+		tenant.ID,
+		tenant.Name,
+		h.mspCustomerNames(),
+		h.resolveMSPCustomer,
+	)
+}
+
 func (h *host) auvikSyncPass(ctx context.Context) (auvikSyncAggregate, error) {
-	cli := auvik.New(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
-	if err := cli.Verify(ctx); err != nil {
-		return auvikSyncAggregate{}, err
-	}
-	tenants, err := cli.ListTenants(ctx)
+	tr := h.tree.Tree()
+	aggOut, err := auvik.SyncAllTenants(ctx, auvik.SyncAllOptions{
+		Client:            auvik.New(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL),
+		AppHome:           ui.GetAppHome(),
+		Tree:              &tr,
+		ImportDefaults:    h.auvikImportDefaults,
+		ResolveCustomer:   h.auvikResolveCustomer,
+		MoveToAuvikFolder: true,
+		UseTunnelDefault:  h.base.AuvikAutoTunnel,
+		PruneStale:        h.base.AuvikPruneStale,
+	})
 	if err != nil {
 		return auvikSyncAggregate{}, err
 	}
-	tr := h.tree.Tree()
-	agg := auvikSyncAggregate{Tenants: len(tenants)}
-	var parts []string
-	for _, tenant := range tenants {
-		devs, err := cli.ListDevices(ctx, []string{tenant.ID}, 300)
-		if err != nil {
-			parts = append(parts, tenant.Name+": "+err.Error())
-			continue
-		}
-		res := auvik.SyncTenantTree(&tr, devs, h.auvikSyncDefaults(tenant))
-		if res.Changed() {
-			agg.Changed = true
-			parts = append(parts, tenant.Name+": "+res.Summary())
-		}
-		if len(res.Errors) > 0 {
-			parts = append(parts, tenant.Name+" errors: "+strings.Join(res.Errors, "; "))
-		}
-	}
-	if agg.Changed {
+	if aggOut.Changed {
 		h.tree.SetTree(tr)
 		h.saveTree(tr)
 	}
-	if len(parts) == 0 {
-		agg.Summary = fmt.Sprintf("no changes across %d client(s)", agg.Tenants)
-	} else {
-		agg.Summary = strings.Join(parts, "\n")
-	}
-	return agg, nil
+	return auvikSyncAggregate{
+		Tenants: aggOut.Tenants,
+		Changed: aggOut.Changed,
+		Summary: aggOut.Summary,
+	}, nil
 }
 
 func (h *host) startAuvikPeriodicSync() {
@@ -2249,7 +2247,7 @@ func (h *host) startAuvikPeriodicSync() {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.auvikSyncCancel = cancel
 	go func() {
-		time.Sleep(30 * time.Second)
+		h.runAuvikSyncAll(false)
 		ticker := time.NewTicker(time.Duration(interval) * time.Minute)
 		defer ticker.Stop()
 		for {

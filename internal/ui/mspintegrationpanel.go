@@ -42,6 +42,7 @@ type MSPIntegrationPanel struct {
 	auvikInterval *widget.Entry
 	auvikTunnel   *widget.Entry
 	auvikAutoTun  *widget.Check
+	auvikPrune    *widget.Check
 
 	itglueKey  *widget.Entry
 	itglueBase *widget.Entry
@@ -107,6 +108,7 @@ func newMSPIntegrationPanel() *MSPIntegrationPanel {
 	p.auvikInterval = entry("60")
 	p.auvikTunnel = entry("Path to AuvikTunnel.exe (optional)")
 	p.auvikAutoTun = widget.NewCheck("Try AuvikTunnel when direct SSH fails", nil)
+	p.auvikPrune = widget.NewCheck("Prune stale Auvik sessions on sync", nil)
 
 	p.itglueKey = entry("ITG.… API key")
 	p.itglueKey.Password = true
@@ -186,6 +188,7 @@ func (p *MSPIntegrationPanel) load(v SettingsFields) {
 	p.auvikInterval.SetText(v.AuvikSyncInterval)
 	p.auvikTunnel.SetText(v.AuvikTunnelPath)
 	p.auvikAutoTun.SetChecked(v.AuvikAutoTunnel)
+	p.auvikPrune.SetChecked(v.AuvikPruneStale)
 
 	p.itglueKey.SetText(v.ITGlueAPIKey)
 	p.itglueBase.SetText(v.ITGlueBaseURL)
@@ -249,6 +252,7 @@ func (p *MSPIntegrationPanel) fields(base SettingsFields) SettingsFields {
 	base.AuvikSyncInterval = p.auvikInterval.Text
 	base.AuvikTunnelPath = p.auvikTunnel.Text
 	base.AuvikAutoTunnel = p.auvikAutoTun.Checked
+	base.AuvikPruneStale = p.auvikPrune.Checked
 
 	base.ITGlueAPIKey = p.itglueKey.Text
 	base.ITGlueBaseURL = p.itglueBase.Text
@@ -326,6 +330,7 @@ func (p *MSPIntegrationPanel) content() fyne.CanvasObject {
 			row("Sync every (min)", p.auvikInterval),
 			row("AuvikTunnel path", p.auvikTunnel),
 			row("Auto tunnel", p.auvikAutoTun),
+			row("Prune stale on sync", p.auvikPrune),
 		),
 		widget.NewLabelWithStyle("Domotz", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		form(row("API key", p.domotzKey), row("Base URL", p.domotzBase)),
