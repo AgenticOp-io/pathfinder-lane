@@ -73,7 +73,7 @@ This doc tracks **CRT parity**, **MSP-specific engineer gaps**, and **what has s
 | Feature | Priority | Effort | Status |
 | --- | --- | --- | --- |
 | PagerDuty bind + document note | P0 | M | **Shipped** — see [PAGERDUTY-API.md](PAGERDUTY-API.md) |
-| Opsgenie / Jira Service Management adapter | P1 | M | Planned — same `incidentbridge` interface |
+| Opsgenie / Jira Service Management adapter | P1 | M | **Shipped (Opsgenie)** — see [OPSGENIE-API.md](OPSGENIE-API.md) |
 | Auto-bind incident from PSA ticket id | P2 | M | Open |
 | Upload evidence to ticket PSA (not only PD note) | P2 | L | Open — vendor-specific |
 

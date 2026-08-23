@@ -25,6 +25,7 @@ type AppChromeConfig struct {
 	OnSettings     func()
 
 	Customers      []string
+	OnAdhocConnect func(host, user string, port int)
 	OnSendChat     func(text string, mode ChatSendMode, customer string)
 	BarButtons     []buttons.Button
 	OnBarAction    func(b buttons.Button, all bool)
@@ -236,7 +237,7 @@ func newOpsDock(cfg AppChromeConfig) *OpsDock {
 	root := container.NewVBox(buttonRow, statusBar)
 	d := &OpsDock{root: root, buttonRow: buttonRow, sendRow: nil, workCtx: workCtx}
 	if cfg.OnSendChat != nil {
-		sendRow := newSendRow(cfg.Customers, cfg.OnSendChat)
+		sendRow := newCommandRow(cfg.Customers, cfg.OnAdhocConnect, cfg.OnSendChat)
 		d.sendRow = sendRow
 		root = container.NewVBox(buttonRow, sendRow, statusBar)
 		d.root = root
