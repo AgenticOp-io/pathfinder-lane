@@ -5,13 +5,14 @@ package ui
 
 import (
 	"errors"
-	"sync/atomic"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -29,6 +30,9 @@ type SFTPView struct {
 	content fyne.CanvasObject
 	cli     *sftpclient.Client
 	win     fyne.Window
+
+	transferMu sync.Mutex
+	transfers  map[*sftpclient.TransferControl]struct{}
 }
 
 // DialSFTP opens the SFTP subsystem on an existing SSH client.
@@ -76,7 +80,7 @@ func NewSFTPViewFromSeed(w fyne.Window, cli *sftpclient.Client, seed SFTPSeed) *
 // thread never waits on SFTP after the tab opens.
 func NewSFTPViewSeeded(w fyne.Window, cli *sftpclient.Client, dir string, ents []sftpclient.Entry, err error) *SFTPView {
 	v := &SFTPView{cli: cli, win: w}
-	v.content = buildSFTPBody(w, cli, dir, ents, err)
+	v.content = buildSFTPBody(v, dir, ents, err)
 	return v
 }
 
@@ -97,10 +101,44 @@ func NewSFTPView(w fyne.Window, sshClient *ssh.Client) (*SFTPView, error) {
 
 func (v *SFTPView) Content() fyne.CanvasObject { return v.content }
 func (v *SFTPView) Start()                     {}
+
+func (v *SFTPView) trackTransfer(ctrl *sftpclient.TransferControl) {
+	if v == nil || ctrl == nil {
+		return
+	}
+	v.transferMu.Lock()
+	if v.transfers == nil {
+		v.transfers = make(map[*sftpclient.TransferControl]struct{})
+	}
+	v.transfers[ctrl] = struct{}{}
+	v.transferMu.Unlock()
+}
+
+func (v *SFTPView) untrackTransfer(ctrl *sftpclient.TransferControl) {
+	if v == nil || ctrl == nil {
+		return
+	}
+	v.transferMu.Lock()
+	delete(v.transfers, ctrl)
+	v.transferMu.Unlock()
+}
+
 func (v *SFTPView) Stop() {
-	if v != nil && v.cli != nil {
-		_ = v.cli.Close()
-		v.cli = nil
+	if v == nil {
+		return
+	}
+	v.transferMu.Lock()
+	for ctrl := range v.transfers {
+		ctrl.Stop()
+	}
+	v.transferMu.Unlock()
+
+	cli := v.cli
+	v.cli = nil
+	if cli != nil {
+		// Never Close the shared SFTP session on the UI thread — it can block
+		// on in-flight pkg/sftp requests and freeze the whole app.
+		go func() { _ = cli.Close() }()
 	}
 }
 
@@ -114,17 +152,20 @@ func ShowSFTPDialog(w fyne.Window, title string, sshClient *ssh.Client) {
 		dialog.ShowError(fmt.Errorf("SFTP: %w", err), w)
 		return
 	}
-	body := buildSFTPBody(w, cli, "", nil, nil)
+	v := &SFTPView{cli: cli, win: w}
+	body := buildSFTPBody(v, "", nil, nil)
 	if title == "" {
 		title = "File Transfer (SFTP)"
 	}
 	d := dialog.NewCustom(title, "Close", body, w)
-	d.SetOnClosed(func() { _ = cli.Close() })
+	d.SetOnClosed(func() { v.Stop() })
 	d.Resize(fyne.NewSize(720, 520))
 	d.Show()
 }
 
-func buildSFTPBody(w fyne.Window, cli *sftpclient.Client, initDir string, initEnts []sftpclient.Entry, initErr error) fyne.CanvasObject {
+func buildSFTPBody(v *SFTPView, initDir string, initEnts []sftpclient.Entry, initErr error) fyne.CanvasObject {
+	w := v.win
+	cli := v.cli
 	remoteDir := "."
 	var entries []sftpclient.Entry
 	selected := -1
@@ -272,7 +313,7 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client, initDir string, initEn
 			}
 			local := uc.URI().Path()
 			_ = uc.Close()
-			runSFTPTransferWindow(w, "Download", e.Name, e.Size, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
+			runSFTPTransferWindow(v, w, "Download", e.Name, e.Size, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
 				err := cli.DownloadProgress(e.Path, local, report, ctrl)
 				if errors.Is(err, sftpclient.ErrStopped) {
 					_ = os.Remove(local) // drop partial download
@@ -316,7 +357,7 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client, initDir string, initEn
 			if st, err := os.Stat(local); err == nil {
 				total = st.Size()
 			}
-			runSFTPTransferWindow(w, "Upload", base, total, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
+			runSFTPTransferWindow(v, w, "Upload", base, total, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
 				return cli.UploadProgress(local, remote, report, ctrl)
 			}, refresh)
 		}, w)
@@ -413,8 +454,11 @@ func buildSFTPBody(w fyne.Window, cli *sftpclient.Client, initDir string, initEn
 
 
 // runSFTPTransferWindow opens a detached transfer window with pause / resume / stop.
-func runSFTPTransferWindow(parent fyne.Window, title, fileName string, total int64, status *widget.Label, work func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error, onOK func()) {
+func runSFTPTransferWindow(host *SFTPView, parent fyne.Window, title, fileName string, total int64, status *widget.Label, work func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error, onOK func()) {
 	ctrl := sftpclient.NewTransferControl()
+	if host != nil {
+		host.trackTransfer(ctrl)
+	}
 	app := fyne.CurrentApp()
 	if app == nil {
 		dialog.ShowError(fmt.Errorf("no application for transfer window"), parent)
@@ -500,7 +544,6 @@ func runSFTPTransferWindow(parent fyne.Window, title, fileName string, total int
 	status.SetText(title + "…")
 
 	// Coalesce progress onto the UI thread: at most one fyne.Do in flight.
-	// Unbounded fyne.Do from the copy goroutine made the app look frozen.
 	var progDone, progTotal atomic.Int64
 	var progSched atomic.Bool
 	scheduleProgress := func(done, tot int64) {
@@ -510,29 +553,23 @@ func runSFTPTransferWindow(parent fyne.Window, title, fileName string, total int
 			return
 		}
 		fyne.Do(func() {
-			for {
-				d := progDone.Load()
-				tot := progTotal.Load()
-				progSched.Store(false)
-				if tot > 0 {
-					bar.Max = float64(tot)
-					bar.SetValue(float64(d))
-					detail.SetText(fmt.Sprintf("%s / %s", formatSize(d), formatSize(tot)))
-				} else {
-					detail.SetText(formatSize(d) + " transferred")
-				}
-				// If a newer sample arrived while we painted, schedule once more.
-				if progDone.Load() == d {
-					return
-				}
-				if !progSched.CompareAndSwap(false, true) {
-					return
-				}
+			progSched.Store(false)
+			d := progDone.Load()
+			tot := progTotal.Load()
+			if tot > 0 {
+				bar.Max = float64(tot)
+				bar.SetValue(float64(d))
+				detail.SetText(fmt.Sprintf("%s / %s", formatSize(d), formatSize(tot)))
+			} else {
+				detail.SetText(formatSize(d) + " transferred")
 			}
 		})
 	}
 
 	go func() {
+		if host != nil {
+			defer host.untrackTransfer(ctrl)
+		}
 		err := work(scheduleProgress, ctrl)
 		fyne.Do(func() {
 			pauseBtn.Disable()

@@ -249,6 +249,10 @@ func (c *Client) DownloadProgress(remote, local string, progress ProgressFunc, c
 			return err
 		}
 		defer rf.Close()
+		if ctrl != nil {
+			// Unblock pkg/sftp concurrent reads when the user hits Stop.
+			ctrl.OnStop(func() { _ = rf.Close() })
+		}
 		lf, err := os.Create(local)
 		if err != nil {
 			return err
@@ -265,6 +269,9 @@ func (c *Client) DownloadProgress(remote, local string, progress ProgressFunc, c
 		}
 		if progress != nil {
 			progress(pw.done, total)
+		}
+		if err != nil && ctrl != nil && ctrl.Stopped() {
+			return ErrStopped
 		}
 		return err
 	})
@@ -291,6 +298,9 @@ func (c *Client) UploadProgress(local, remote string, progress ProgressFunc, ctr
 			return err
 		}
 		defer rf.Close()
+		if ctrl != nil {
+			ctrl.OnStop(func() { _ = rf.Close() })
+		}
 
 		pr := &progressReader{r: lf, total: total, fn: progress, ctrl: ctrl}
 		// Prefer ReaderFrom so pkg/sftp can pipeline concurrent writes.
@@ -302,6 +312,9 @@ func (c *Client) UploadProgress(local, remote string, progress ProgressFunc, ctr
 		}
 		if progress != nil {
 			progress(pr.done, total)
+		}
+		if err != nil && ctrl != nil && ctrl.Stopped() {
+			return ErrStopped
 		}
 		return err
 	})

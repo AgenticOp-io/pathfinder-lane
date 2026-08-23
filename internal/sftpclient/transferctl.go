@@ -18,9 +18,10 @@ const (
 
 // TransferControl pauses, resumes, or stops an in-flight copy.
 type TransferControl struct {
-	state atomic.Int32
-	mu    sync.Mutex
-	cond  *sync.Cond
+	state  atomic.Int32
+	mu     sync.Mutex
+	cond   *sync.Cond
+	onStop []func()
 }
 
 // NewTransferControl returns a ready control (running, not paused).
@@ -49,15 +50,41 @@ func (c *TransferControl) Resume() {
 	c.mu.Unlock()
 }
 
+// OnStop registers a hook invoked when Stop runs (e.g. close a blocked file).
+func (c *TransferControl) OnStop(fn func()) {
+	if c == nil || fn == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.state.Load() == stateStopped {
+		c.mu.Unlock()
+		go fn()
+		return
+	}
+	c.onStop = append(c.onStop, fn)
+	c.mu.Unlock()
+}
+
 // Stop aborts the transfer; the copy returns ErrStopped.
 func (c *TransferControl) Stop() {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
+	if c.state.Load() == stateStopped {
+		c.mu.Unlock()
+		return
+	}
 	c.state.Store(stateStopped)
+	hooks := c.onStop
+	c.onStop = nil
 	c.cond.Broadcast()
 	c.mu.Unlock()
+	for _, fn := range hooks {
+		if fn != nil {
+			go fn()
+		}
+	}
 }
 
 // Stopped reports whether Stop was called.
