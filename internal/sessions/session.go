@@ -211,6 +211,9 @@ type Node struct {
 
 	Jump JumpSpec `yaml:"jump,omitempty"`
 
+	// ConsoleFallback names a sibling session in the same folder (serial/console).
+	ConsoleFallback string `yaml:"console_fallback,omitempty"`
+
 	// LegacyAlgorithms appends the old KEX/cipher/MAC set. Required for
 	// gear that predates the modern defaults, off by default.
 	LegacyAlgorithms bool `yaml:"legacy_algorithms,omitempty"`

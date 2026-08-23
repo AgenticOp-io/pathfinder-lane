@@ -16,6 +16,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/incidentbridge"
 	"github.com/scottpeterman/pathfinderssh/internal/opsgenie"
 	"github.com/scottpeterman/pathfinderssh/internal/pagerduty"
+	"github.com/scottpeterman/pathfinderssh/internal/psaticket"
 	"github.com/scottpeterman/pathfinderssh/internal/ui"
 	"github.com/scottpeterman/pathfinderssh/internal/workcontext"
 )
@@ -70,7 +71,26 @@ func (h *host) bindWorkContext() {
 	ui.ShowBindWorkContextDialog(h.win, ui.WorkContextBindOptions{
 		CustomerNames: h.mspCustomerNames(),
 		OnBind: func(provider, incidentRaw, customer, title, notes string) error {
-			h.workCtx = workcontext.Bind(provider, incidentRaw, customer, title, notes)
+			incidentID := workcontext.NormalizeIncidentID(incidentRaw)
+			if workcontext.IsPSAProvider(provider) {
+				info, err := h.lookupPSATicket(provider, incidentRaw)
+				if err != nil {
+					return err
+				}
+				if incidentID == "" {
+					incidentID = info.ID
+				}
+				if customer == "" {
+					customer = h.resolveMSPCustomer(info.CustomerName)
+				}
+				if title == "" {
+					title = info.Title
+				}
+			}
+			if incidentID == "" {
+				return fmt.Errorf("incident or ticket id required")
+			}
+			h.workCtx = workcontext.Bind(provider, incidentID, customer, title, notes)
 			h.saveWorkContext()
 			h.enterOpsDesk(h.workCtx)
 			return nil
@@ -112,7 +132,17 @@ func (h *host) documentWorkToIncident() {
 func (h *host) postWorkDocumentation(incidentRaw, engineerNote string, allTabs, includeMap, includeConfigs bool) (string, error) {
 	incidentID := workcontext.NormalizeIncidentID(incidentRaw)
 	if incidentID == "" {
+		incidentID = strings.TrimSpace(incidentRaw)
+	}
+	if incidentID == "" {
 		return "", fmt.Errorf("incident id or URL required")
+	}
+	provider := h.workCtx.Provider
+	if provider == "" {
+		provider = workcontext.ProviderPagerDuty
+	}
+	if workcontext.IsPSAProvider(provider) {
+		return h.postPSAWorkDocumentation(incidentID, engineerNote, allTabs, includeMap, includeConfigs, provider)
 	}
 	scrollbacks, tabs := h.collectEvidenceFiles(allTabs)
 	files, err := capturepack.Collect(capturepack.Options{
@@ -145,10 +175,6 @@ func (h *host) postWorkDocumentation(incidentRaw, engineerNote string, allTabs, 
 	if err := evidence.WriteZip(localPath, incidentID, files); err != nil {
 		return "", err
 	}
-	provider := h.workCtx.Provider
-	if provider == "" {
-		provider = workcontext.ProviderPagerDuty
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	bridge := h.incidentBridge(provider)
@@ -175,6 +201,66 @@ func (h *host) postWorkDocumentation(incidentRaw, engineerNote string, allTabs, 
 	}
 	h.saveWorkContext()
 	return fmt.Sprintf("Posted note to %s alert/incident %s.\nCapture pack: %s", provider, incidentID, localPath), nil
+}
+
+func (h *host) postPSAWorkDocumentation(ticketID, engineerNote string, allTabs, includeMap, includeConfigs bool, provider string) (string, error) {
+	scrollbacks, tabs := h.collectEvidenceFiles(allTabs)
+	files, err := capturepack.Collect(capturepack.Options{
+		IncidentID:     ticketID,
+		Customer:       h.opsDeskCustomer(),
+		AppHome:        ui.GetAppHome(),
+		StorePath:      h.lastCapture.Params.StorePath,
+		LinkedHosts:    h.workCtx.LinkedHosts,
+		Scrollbacks:    scrollbacks,
+		IncludeMap:     includeMap,
+		IncludeConfigs: includeConfigs,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("nothing to document — open a terminal or enable map/config capture")
+	}
+	summary := workcontext.BuildSummary(workcontext.SummaryInput{
+		Context:      h.workCtx,
+		OpenTabs:     tabs,
+		EngineerNote: engineerNote,
+	})
+	zipBytes, err := evidence.BuildZipBytes(ticketID, files)
+	if err != nil {
+		return "", err
+	}
+	name := capturepack.PackName(ticketID)
+	localPath := filepath.Join(ui.GetLogsDir(), name)
+	if err := evidence.WriteZip(localPath, ticketID, files); err != nil {
+		return "", err
+	}
+	bridge := h.psaTicketBridge(provider)
+	if bridge == nil {
+		return "", fmt.Errorf("PSA provider %q not configured", provider)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	req := psaticket.DocumentRequest{
+		TicketID:  ticketID,
+		Summary:   summary + fmt.Sprintf("\nLocal capture pack: %s\n", localPath),
+		FileName:  name,
+		FileBytes: zipBytes,
+	}
+	if err := psaticket.PostDocument(ctx, bridge, req); err != nil {
+		return "", err
+	}
+	if !h.workCtx.Active() || h.workCtx.IncidentID != ticketID {
+		h.workCtx = workcontext.Bind(provider, ticketID, h.workCtx.CustomerName, h.workCtx.Title, engineerNote)
+	} else {
+		h.workCtx.IncidentID = ticketID
+		h.workCtx.Provider = provider
+	}
+	if note := strings.TrimSpace(engineerNote); note != "" {
+		h.workCtx.EngineerNotes = note
+	}
+	h.saveWorkContext()
+	return fmt.Sprintf("Posted note to %s ticket %s.\nCapture pack: %s", provider, ticketID, localPath), nil
 }
 
 func (h *host) collectEvidenceFiles(allTabs bool) ([]evidence.File, []workcontext.TabInfo) {

@@ -155,6 +155,9 @@ type SessionForm struct {
 	jumpKey  *widget.Entry
 	jumpPass *widget.Entry
 
+	// Console fallback (SSH dual-path).
+	consoleFallback *widget.Entry
+
 	// --- inventory ---
 	vendor     *widget.Entry
 	model      *widget.Entry
@@ -270,6 +273,7 @@ func (f *SessionForm) SetNode(n sessions.Node) {
 	f.jumpCred.SetSelected(f.credLabel(n.Jump.Credential))
 	f.jumpKey.SetText(n.Jump.KeyPath)
 	f.jumpPass.SetText(n.Jump.KeyPassphrase)
+	f.consoleFallback.SetText(n.ConsoleFallback)
 
 	f.vendor.SetText(n.Vendor)
 	f.model.SetText(n.Model)
@@ -352,6 +356,7 @@ func (f *SessionForm) build() {
 	f.jumpKey = entry("~/.ssh/id_ed25519")
 	f.jumpPass = widget.NewPasswordEntry()
 	f.jumpPass.SetPlaceHolder("not saved to the session file")
+	f.consoleFallback = entry("sibling session name in this folder")
 
 	f.vendor = entry("Cisco")
 	f.model = entry("ISR 4331")
@@ -504,7 +509,9 @@ func (f *SessionForm) advancedTab() fyne.CanvasObject {
 			row("Jump credential", f.jumpCred),
 			row("Jump key path", f.jumpKey),
 			row("Jump key passphrase", f.jumpPass),
+			row("Console fallback", f.consoleFallback),
 		),
+		widget.NewLabel("Console fallback — sibling session name used when SSH fails (serial/console)."),
 	)
 
 	return container.NewVScroll(container.NewVBox(
@@ -605,6 +612,7 @@ func (f *SessionForm) read() sessions.Node {
 		KeyPath:       f.jumpKey.Text,
 		KeyPassphrase: f.jumpPass.Text,
 	}
+	n.ConsoleFallback = strings.TrimSpace(f.consoleFallback.Text)
 
 	n.Vendor = f.vendor.Text
 	n.Model = f.model.Text

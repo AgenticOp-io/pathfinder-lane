@@ -13,9 +13,22 @@ import (
 
 // Provider names an incident system (pagerduty, opsgenie, …).
 const (
-	ProviderPagerDuty = "pagerduty"
-	ProviderOpsgenie  = "opsgenie"
+	ProviderPagerDuty   = "pagerduty"
+	ProviderOpsgenie    = "opsgenie"
+	ProviderConnectWise = "connectwise"
+	ProviderAutotask    = "autotask"
+	ProviderHalo        = "halo"
 )
+
+// IsPSAProvider reports incident systems that are PSA tickets (not on-call).
+func IsPSAProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case ProviderConnectWise, ProviderAutotask, ProviderHalo:
+		return true
+	default:
+		return false
+	}
+}
 
 // Context is the engineer's active work binding for this desktop session.
 type Context struct {

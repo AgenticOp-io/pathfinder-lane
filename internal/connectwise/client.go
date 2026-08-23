@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"bytes"
 	"time"
 
 	"github.com/scottpeterman/pathfinderssh/internal/psasync"
@@ -130,6 +131,38 @@ func (c *Client) http() *http.Client {
 		return c.HTTP
 	}
 	return http.DefaultClient
+}
+
+func (c *Client) postJSON(ctx context.Context, path string, payload interface{}) error {
+	companyID, publicKey, privateKey, clientID, base, err := c.credentials()
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	u := base + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(companyID+"+"+publicKey, privateKey)
+	if clientID != "" {
+		req.Header.Set("clientId", clientID)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("connectwise API %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	return nil
 }
 
 // PSA implements psasync.Source.
