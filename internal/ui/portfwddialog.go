@@ -104,12 +104,22 @@ func ShowPortForwardDialog(w fyne.Window, title string, sshClient *ssh.Client, h
 	profiles, _ := portfwd.LoadProfiles(GetAppHome())
 	profileNames := []string{"(custom)"}
 	profileByName := map[string]portfwd.Profile{}
-	for _, p := range profiles {
-		profileNames = append(profileNames, p.Name)
-		profileByName[p.Name] = p
-	}
 	profileSel := widget.NewSelect(profileNames, nil)
 	profileSel.SetSelected("(custom)")
+	reloadProfiles := func() {
+		profileNames = []string{"(custom)"}
+		profileByName = map[string]portfwd.Profile{}
+		profiles, _ = portfwd.LoadProfiles(GetAppHome())
+		for _, p := range profiles {
+			profileNames = append(profileNames, p.Name)
+			profileByName[p.Name] = p
+		}
+		profileSel.SetOptions(profileNames)
+		if profileSel.Selected == "" {
+			profileSel.SetSelected("(custom)")
+		}
+	}
+	reloadProfiles()
 	profileSel.OnChanged = func(name string) {
 		p, ok := profileByName[name]
 		if !ok {
@@ -142,14 +152,20 @@ func ShowPortForwardDialog(w fyne.Window, title string, sshClient *ssh.Client, h
 
 	start := widget.NewButtonWithIcon("Start", theme.MediaPlayIcon(), func() {
 		spec := portfwd.Spec{ListenAddr: listen.Text, TargetAddr: target.Text}
-		switch kind.Selected {
-		case "Remote":
-			spec.Kind = portfwd.Remote
-		case "Dynamic (SOCKS5)":
-			spec.Kind = portfwd.Dynamic
-			spec.TargetAddr = ""
-		default:
-			spec.Kind = portfwd.Local
+		if name := profileSel.Selected; name != "" && name != "(custom)" {
+			if p, ok := profileByName[name]; ok {
+				spec = portfwd.SpecFromProfile(p)
+			}
+		} else {
+			switch kind.Selected {
+			case "Remote":
+				spec.Kind = portfwd.Remote
+			case "Dynamic (SOCKS5)":
+				spec.Kind = portfwd.Dynamic
+				spec.TargetAddr = ""
+			default:
+				spec.Kind = portfwd.Local
+			}
 		}
 		handle, err := portfwd.Start(sshClient, spec)
 		if err != nil {
@@ -185,7 +201,57 @@ func ShowPortForwardDialog(w fyne.Window, title string, sshClient *ssh.Client, h
 				dialog.ShowError(err, w)
 				return
 			}
+			reloadProfiles()
 			status.SetText("Saved profile " + p.Name)
+		}, w)
+	})
+	startProfile := widget.NewButton("Start profile", func() {
+		name := profileSel.Selected
+		if name == "" || name == "(custom)" {
+			status.SetText("Select a saved profile")
+			return
+		}
+		p, ok := profileByName[name]
+		if !ok {
+			status.SetText("Profile not found")
+			return
+		}
+		kind.SetSelected("Local")
+		switch p.Kind {
+		case "remote":
+			kind.SetSelected("Remote")
+		case "dynamic":
+			kind.SetSelected("Dynamic (SOCKS5)")
+		}
+		listen.SetText(p.ListenAddr)
+		target.SetText(p.TargetAddr)
+		handle, err := portfwd.Start(sshClient, portfwd.SpecFromProfile(p))
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		hub.Add(handle)
+		refresh()
+	})
+	deleteProfile := widget.NewButton("Delete profile", func() {
+		name := profileSel.Selected
+		if name == "" || name == "(custom)" {
+			status.SetText("Select a profile to delete")
+			return
+		}
+		dialog.ShowConfirm("Delete profile", "Delete forward profile "+name+"?", func(ok bool) {
+			if !ok {
+				return
+			}
+			all, _ := portfwd.LoadProfiles(GetAppHome())
+			all = portfwd.DeleteProfile(all, name)
+			if err := portfwd.SaveProfiles(GetAppHome(), all); err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			reloadProfiles()
+			profileSel.SetSelected("(custom)")
+			status.SetText("Deleted profile " + name)
 		}, w)
 	})
 	stopSel := -1
@@ -216,7 +282,7 @@ func ShowPortForwardDialog(w fyne.Window, title string, sshClient *ssh.Client, h
 		widget.NewFormItem("Target", target),
 	)
 	body := container.NewBorder(
-		container.NewVBox(form, container.NewHBox(start, saveProfile, stopBtn), status),
+		container.NewVBox(form, container.NewHBox(start, startProfile, saveProfile, deleteProfile, stopBtn), status),
 		nil, nil, nil, list,
 	)
 	refresh()

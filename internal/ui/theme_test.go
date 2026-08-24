@@ -9,8 +9,10 @@
 package ui
 
 import (
+	"image/color"
 	"testing"
 
+	"fyne.io/fyne/v2/theme"
 	"gopkg.in/yaml.v3"
 )
 
@@ -63,6 +65,31 @@ func TestTerminalDarknessComesFromThePaletteNotTheChrome(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestChromeBordersDifferFromBackground(t *testing.T) {
+	for _, v := range []AppVariant{AppDark, AppLight} {
+		th := NewNativeTheme(v)
+		bg := th.Color(theme.ColorNameBackground, 0)
+		border := th.Color(theme.ColorNameInputBorder, 0)
+		sep := th.Color(theme.ColorNameSeparator, 0)
+		btn := th.Color(theme.ColorNameButton, 0)
+		if sameNRGBA(bg, border) {
+			t.Errorf("%s: input border matches background", v)
+		}
+		if sameNRGBA(bg, sep) {
+			t.Errorf("%s: separator matches background", v)
+		}
+		if sameNRGBA(bg, btn) {
+			t.Errorf("%s: button fill matches background", v)
+		}
+	}
+}
+
+func sameNRGBA(a, b color.Color) bool {
+	ar, ag, ab, aa := a.RGBA()
+	br, bg, bb, ba := b.RGBA()
+	return ar == br && ag == bg && ab == bb && aa == ba
 }
 
 func TestAppVariantNormalizes(t *testing.T) {

@@ -87,7 +87,14 @@ type SettingsFields struct {
 	ChangeWindowStart string
 	ChangeWindowEnd   string
 	CursorAPIKey      string
+	CursorRepo        string
+	CursorRepoRef     string
 	TroubleshootAddon bool
+	SessionTreePinned bool
+	MSPBridgeDisabled  bool
+	MSPBridgePort      string
+	MSPBridgeToken     string
+	MSPBridgeAllowSend bool
 	AuvikUsername     string
 	AuvikAPIKey       string
 	AuvikBaseURL      string
@@ -182,8 +189,15 @@ func SettingsFieldsOf(s Settings) SettingsFields {
 		ChangeWindowStart: s.ChangeWindowStart,
 		ChangeWindowEnd:   s.ChangeWindowEnd,
 		CursorAPIKey:      s.CursorAPIKey,
-		TroubleshootAddon: s.TroubleshootAddon,
-		AuvikUsername:     s.AuvikUsername,
+		CursorRepo:        s.CursorRepo,
+		CursorRepoRef:     s.CursorRepoRef,
+		TroubleshootAddon:  s.TroubleshootAddon,
+		SessionTreePinned:  s.SessionTreePinned,
+		MSPBridgeDisabled:  s.MSPBridgeDisabled,
+		MSPBridgePort:      strconv.Itoa(MSPBridgePortOrDefault(s.MSPBridgePort)),
+		MSPBridgeToken:     s.MSPBridgeToken,
+		MSPBridgeAllowSend: s.MSPBridgeAllowSend,
+		AuvikUsername:      s.AuvikUsername,
 		AuvikAPIKey:       s.AuvikAPIKey,
 		AuvikBaseURL:      s.AuvikBaseURL,
 		AuvikSyncEnabled:  s.AuvikSyncEnabled,
@@ -349,7 +363,18 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 	out.ChangeWindowStart = strings.TrimSpace(f.ChangeWindowStart)
 	out.ChangeWindowEnd = strings.TrimSpace(f.ChangeWindowEnd)
 	out.CursorAPIKey = strings.TrimSpace(f.CursorAPIKey)
+	out.CursorRepo = strings.TrimSpace(f.CursorRepo)
+	out.CursorRepoRef = strings.TrimSpace(f.CursorRepoRef)
 	out.TroubleshootAddon = f.TroubleshootAddon
+	out.SessionTreePinned = f.SessionTreePinned
+	out.MSPBridgeDisabled = f.MSPBridgeDisabled
+	out.MSPBridgeAllowSend = f.MSPBridgeAllowSend
+	out.MSPBridgeToken = strings.TrimSpace(f.MSPBridgeToken)
+	if n, err := settingsInt("MSP bridge port", f.MSPBridgePort, 1, 65535); err != nil {
+		errs = appendErr(errs, err)
+	} else if n != nil {
+		out.MSPBridgePort = *n
+	}
 	out.AuvikUsername = strings.TrimSpace(f.AuvikUsername)
 	out.AuvikAPIKey = strings.TrimSpace(f.AuvikAPIKey)
 	if u := strings.TrimSpace(f.AuvikBaseURL); u != "" {
@@ -424,6 +449,13 @@ func (f SettingsFields) Apply(base Settings) (Settings, []SettingsFieldError) {
 	out.VaultBreakGlass = f.VaultBreakGlass
 
 	return out.Normalized(), errs
+}
+
+func MSPBridgePortOrDefault(port int) int {
+	if port <= 0 {
+		return 19790
+	}
+	return port
 }
 
 // settingsInt parses one bounded integer field. A nil result with a nil error

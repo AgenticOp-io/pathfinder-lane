@@ -94,11 +94,65 @@ func ApplyAppTheme(a fyne.App, v AppVariant) {
 // whole point of a two-value setting is that the user's choice wins, so the
 // argument is replaced rather than consulted.
 func (t *NativeTheme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
+	if t.dark {
+		if c, ok := chromeDarkContrast(name); ok {
+			return c
+		}
+	} else {
+		if c, ok := chromeLightContrast(name); ok {
+			return c
+		}
+	}
 	variant := theme.VariantLight
 	if t.dark {
 		variant = theme.VariantDark
 	}
 	return t.Theme.Color(name, variant)
+}
+
+// chromeDarkContrast lifts buttons, tab chrome, and borders off the near-black
+// Fyne dark background. Default InputBorder (#39393a) and HeaderBackground
+// (#1b1b1b) sit on Background (#171718) and read as the same color.
+func chromeDarkContrast(name fyne.ThemeColorName) (color.Color, bool) {
+	switch name {
+	case theme.ColorNameButton:
+		return color.NRGBA{R: 0x3a, G: 0x3b, B: 0x42, A: 0xff}, true
+	case theme.ColorNameDisabledButton:
+		return color.NRGBA{R: 0x2e, G: 0x2f, B: 0x34, A: 0xff}, true
+	case theme.ColorNameHeaderBackground:
+		return color.NRGBA{R: 0x24, G: 0x25, B: 0x2a, A: 0xff}, true
+	case theme.ColorNameHover:
+		return color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x28}, true
+	case theme.ColorNameInputBackground:
+		return color.NRGBA{R: 0x2a, G: 0x2a, B: 0x2e, A: 0xff}, true
+	case theme.ColorNameInputBorder:
+		return color.NRGBA{R: 0x8a, G: 0x8a, B: 0x90, A: 0xff}, true
+	case theme.ColorNameSeparator:
+		return color.NRGBA{R: 0x6a, G: 0x6a, B: 0x70, A: 0xff}, true
+	case theme.ColorNameShadow:
+		return color.NRGBA{R: 0x7a, G: 0x7a, B: 0x80, A: 0xff}, true
+	}
+	return nil, false
+}
+
+func chromeLightContrast(name fyne.ThemeColorName) (color.Color, bool) {
+	switch name {
+	case theme.ColorNameButton:
+		return color.NRGBA{R: 0xe6, G: 0xe6, B: 0xe8, A: 0xff}, true
+	case theme.ColorNameDisabledButton:
+		return color.NRGBA{R: 0xee, G: 0xee, B: 0xf0, A: 0xff}, true
+	case theme.ColorNameHeaderBackground:
+		return color.NRGBA{R: 0xec, G: 0xec, B: 0xee, A: 0xff}, true
+	case theme.ColorNameHover:
+		return color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0x18}, true
+	case theme.ColorNameInputBorder:
+		return color.NRGBA{R: 0x8c, G: 0x8c, B: 0x90, A: 0xff}, true
+	case theme.ColorNameSeparator:
+		return color.NRGBA{R: 0xb0, G: 0xb0, B: 0xb4, A: 0xff}, true
+	case theme.ColorNameShadow:
+		return color.NRGBA{R: 0xa8, G: 0xa8, B: 0xac, A: 0xff}, true
+	}
+	return nil, false
 }
 
 func (t *NativeTheme) Font(style fyne.TextStyle) fyne.Resource {
@@ -119,6 +173,8 @@ func (t *NativeTheme) Size(name fyne.ThemeSizeName) float32 {
 		return 7
 	case theme.SizeNamePadding:
 		return 4
+	case theme.SizeNameInputBorder:
+		return 2 // default 1px borders vanish against the chrome
 	}
 	return theme.DefaultTheme().Size(name)
 }

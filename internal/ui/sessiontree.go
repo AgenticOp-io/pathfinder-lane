@@ -82,6 +82,9 @@ type SessionTreeOptions struct {
 	// OnChanged fires after any structural edit. The host saves; this widget
 	// never touches a file.
 	OnChanged func(sessions.Tree)
+
+	// RecentPath is recent.json under app home. Empty disables the strip.
+	RecentPath string
 }
 
 // SessionTree is the docked inventory panel.
@@ -110,6 +113,8 @@ type SessionTree struct {
 	// sessionTotal is cached on each rebuild; avoids flattening Nodes() on
 	// every status update.
 	sessionTotal int
+
+	recent *recentStrip
 }
 
 // NewSessionTree builds the panel. Call it after app.New(): it constructs
@@ -117,6 +122,9 @@ type SessionTree struct {
 // CreateRenderer with a panic that names a layout function.
 func NewSessionTree(o SessionTreeOptions) *SessionTree {
 	t := &SessionTree{opts: o}
+	if o.RecentPath != "" && o.OnActivate != nil {
+		t.recent = newRecentStrip(o.OnActivate)
+	}
 	t.view = BuildTreeView(t.tree, "")
 	t.build()
 	return t
@@ -251,9 +259,31 @@ func (t *SessionTree) build() {
 		TipIconButton("Delete selected", theme.DeleteIcon(), t.deleteSelected),
 	)
 
-	bottom := container.NewVBox(actions, t.status)
+	bottom := actions
+	// Recent chips live under the main Connect toolbar (host wires RecentBar).
 	t.content = container.NewBorder(t.search, bottom, nil, nil, t.tw)
 	t.refresh()
+}
+
+// RecentBar is the recent-session chip strip for the top chrome (under Connect).
+// Nil when RecentPath was not configured.
+func (t *SessionTree) RecentBar() fyne.CanvasObject {
+	if t == nil || t.recent == nil {
+		return nil
+	}
+	return t.recent.Content()
+}
+
+// RefreshRecent reloads the recent-session chip strip (call after Touch).
+func (t *SessionTree) RefreshRecent() {
+	if t == nil {
+		return
+	}
+	fyne.Do(func() {
+		if t.recent != nil {
+			t.recent.rebuild(t.opts.RecentPath, t.tree)
+		}
+	})
 }
 
 // RefreshView redraws the inventory from the current tree and filter.
@@ -305,23 +335,19 @@ func (t *SessionTree) refresh() {
 		}
 	}
 	t.setStatus(filter)
+	if t.recent != nil {
+		t.recent.rebuild(t.opts.RecentPath, t.tree)
+	}
 }
 
 func (t *SessionTree) setStatus(filter string) {
+	// Session counts used to sit under the tree; they added noise without helping
+	// operators. Keep the label for rare one-shot feedback (create/move errors).
 	if t.status == nil {
 		return
 	}
-	total := t.sessionTotal
-	switch {
-	case total == 0 && filter == "":
-		t.status.SetText("Empty — File → Import SecureCRT (pick customer list folder)")
-	case filter == "":
-		t.status.SetText(fmt.Sprintf("%d sessions", total))
-	case t.view.Matched == 0:
-		t.status.SetText(fmt.Sprintf("No match in %d sessions", total))
-	default:
-		t.status.SetText(fmt.Sprintf("%d of %d", t.view.Matched, total))
-	}
+	_ = filter
+	t.status.SetText("")
 }
 
 // changed redraws and tells the host to save.
@@ -699,7 +725,8 @@ func (r *sessionRow) set(uid widget.TreeNodeID, row TreeRow) {
 	if row.IsFolder {
 		r.icon.SetResource(theme.FolderIcon())
 		r.icon.Show()
-		r.detail.Show()
+		// Folder session counts (label parentheses / right-hand totals) are gone.
+		r.detail.Hide()
 		r.more.Hide()
 		return
 	}

@@ -129,7 +129,7 @@ if ($select.Count -eq 1 -and $select[0] -eq "all") {
 } elseif ($select.Count -eq 1 -and $select[0] -eq "gui") {
     $list = @($all | Where-Object { Test-Gui $_ })
 } elseif ($select.Count -eq 1 -and $select[0] -eq "installers") {
-    $list = @("pathfinder", "pfseed", "pfinstall", "pfengineer-install", "pfsetup-msp", "pfsetup-o365", "pfsetup-google", "pfsetup-apis")
+    $list = @("pathfinder", "pathfinder-msp", "pfseed", "pfinstall", "pfengineer-install", "pfsetup-msp", "pfsetup-o365", "pfsetup-google", "pfsetup-apis")
 } elseif ($select.Count -eq 1 -and $select[0] -eq "cli") {
     $list = @($all | Where-Object { -not (Test-Gui $_) })
 } else {
@@ -174,6 +174,23 @@ foreach ($app in $list) {
 }
 
 Write-Host ">> done: $Out"
+
+# Stage Auvik's official tunnel client beside the bundle so pfinstall copies it.
+$auvikName = "AuvikTunnel.exe"
+$auvikDest = Join-Path $Out $auvikName
+if (-not (Test-Path $auvikDest)) {
+    $auvikSrc = @(
+        (Join-Path $env:LOCALAPPDATA "PathfinderSSH-MSP\bin\$auvikName"),
+        (Join-Path $env:USERPROFILE "auvik\Auvik Tunnel\$auvikName")
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($auvikSrc) {
+        Copy-Item -Force $auvikSrc $auvikDest
+        Write-Host ">> staged $auvikName from $auvikSrc"
+    } else {
+        Write-Host "!! $auvikName not found — installer will not include the Auvik tunnel sidecar"
+    }
+}
+
 Get-ChildItem $Out -Filter *.exe | Select-Object Name, Length, FullName
 
 if ($failed.Count -gt 0) {

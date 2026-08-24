@@ -70,6 +70,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/crawldial"
 	"github.com/scottpeterman/pathfinderssh/internal/crawler"
 	"github.com/scottpeterman/pathfinderssh/internal/crawlrun"
+	"github.com/scottpeterman/pathfinderssh/internal/crashlog"
 	"github.com/scottpeterman/pathfinderssh/internal/crtimport"
 	"github.com/scottpeterman/pathfinderssh/internal/cursorapi"
 	"github.com/scottpeterman/pathfinderssh/internal/evidence"
@@ -77,6 +78,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/itglue"
 	"github.com/scottpeterman/pathfinderssh/internal/mapweb"
 	"github.com/scottpeterman/pathfinderssh/internal/mspauth"
+	"github.com/scottpeterman/pathfinderssh/internal/pfbridge"
 	"github.com/scottpeterman/pathfinderssh/internal/policy"
 	"github.com/scottpeterman/pathfinderssh/internal/product"
 	"github.com/scottpeterman/pathfinderssh/internal/psasync"
@@ -116,6 +118,7 @@ func main() {
 	flag.Parse()
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	teePathfinderLog()
 
 	if strings.TrimSpace(*logoPath) != "" {
 		ui.SetLogoPath(*logoPath)
@@ -231,6 +234,7 @@ func main() {
 		h.vaultPath = vaultcli.DefaultPath()
 	}
 	h.shell = ui.NewShell(a, w)
+	h.shell.OnActiveTerminalChange = h.refreshCursorAsk
 	h.initWorkContext()
 
 	// Seed the dialogs so the first launch is not an empty form.
@@ -268,6 +272,12 @@ func main() {
 		if h.shuttingDown {
 			return
 		}
+		// Fyne/GLFW on Windows fires this when a popup or overlay hides (Connecting,
+		// errors). That used to look like an idle close-box click and quit the app.
+		if h.windowCloseSuppressed() {
+			log.Printf("[window] ignoring close intercept (dialog still up / just closed)")
+			return
+		}
 		// The close box stays live while a dialog is up, so without
 		// this a second click stacks a second confirmation -- and
 		// answering one of them then quits out from under the other,
@@ -277,7 +287,16 @@ func main() {
 		}
 		msg, ask := ui.ShutdownPrompt(h.shell.Busy())
 		if !ask {
-			h.shutdown()
+			// Still confirm: an empty Busy list is also what we see when a
+			// dialog-hide event is mistaken for the window close box.
+			h.askingQuit = true
+			dialog.ShowConfirm("Quit PathfinderSSH MSP?", "Close the application?", func(ok bool) {
+				if !ok {
+					h.askingQuit = false
+					return
+				}
+				h.shutdown()
+			}, w)
 			return
 		}
 		h.askingQuit = true
@@ -286,8 +305,6 @@ func main() {
 				h.askingQuit = false
 				return
 			}
-			// Leave askingQuit set until shutdown flips shuttingDown so a
-			// second close-box click cannot open another dialog in between.
 			h.shutdown()
 		}, w)
 		d.SetConfirmText("Quit")
@@ -317,6 +334,7 @@ func main() {
 	h.auvikTunnels.SetAppHome(ui.GetAppHome())
 	h.auvikTunnels.SetCredentials(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
 	h.startAuvikPeriodicSync()
+	h.syncMSPBridge()
 
 	// Immediately before ShowAndRun, like an applet's Start: the watchdog
 	// hands work to fyne.Do and needs a running driver.
@@ -400,9 +418,16 @@ type host struct {
 	auvikSyncCancel context.CancelFunc
 	auvikTunnels    *auvik.TunnelManager
 
-	// Cursor AI side pane (Troubleshoot addon).
-	cursorPaneVisible bool
-	cursorPane        fyne.CanvasObject
+	// Cursor AI ask popup (Troubleshoot addon) — separate window, not docked.
+	cursorAsk *ui.CursorAskPane
+	cursorWin fyne.Window
+
+	// Settings is a window of the app, not a canvas overlay that greys out
+	// the main window.
+	settingsWin fyne.Window
+
+	// mspBridge is the localhost HTTP API for Cursor IDE (pathfinder-msp).
+	mspBridge *pfbridge.Server
 
 	// MSP org enrollment + engineer sign-in (mspauth hooks).
 	mspAuth       *mspauth.Authenticator
@@ -417,6 +442,14 @@ type host struct {
 	workContextLabel *widget.Label
 	opsDeskCustomerName string
 	treeFilterBackup    string
+
+	// connectUIOpen is true while the Connecting/Reconnecting popup is shown.
+	// Fyne on Windows can fire SetCloseIntercept when a window hides;
+	// without this the idle-window path calls shutdown() and the app vanishes.
+	connectUIOpen      atomic.Bool
+	suppressCloseUntil atomic.Int64
+	connectWin         fyne.Window
+	connectWinAppHide  atomic.Bool
 }
 
 // shutdown ends the application: applets first, then the map server, then the
@@ -430,6 +463,7 @@ func (h *host) shutdown() {
 	if h.shuttingDown {
 		return
 	}
+	log.Printf("[quit] shutdown")
 	h.shuttingDown = true
 	h.askingQuit = false
 
@@ -437,6 +471,11 @@ func (h *host) shutdown() {
 	// intercept: Busy() still sees live sessions (OnClose is async), the quit
 	// dialog comes back, and the app never leaves ShowAndRun.
 	h.win.SetCloseIntercept(nil)
+
+	if h.mspBridge != nil {
+		h.mspBridge.Stop()
+		h.mspBridge = nil
+	}
 
 	h.shell.StopFocusWatch()
 
@@ -474,6 +513,132 @@ func (h *host) shutdown() {
 	h.app.Quit()
 }
 
+func (h *host) beginConnectUI() {
+	if h == nil {
+		return
+	}
+	h.connectUIOpen.Store(true)
+	h.suppressWindowClose(2 * time.Second)
+}
+
+func (h *host) endConnectUI() {
+	if h == nil {
+		return
+	}
+	h.connectUIOpen.Store(false)
+	h.suppressWindowClose(1500 * time.Millisecond)
+}
+
+// beginConnecting shows Connecting/Reconnecting in a small detached window so
+// the main app stays usable. Cancel (or closing that window) aborts the dial.
+// Hide from the app (success, error, or an auth prompt taking over) must go
+// through hideConnectingDialog so Cancel is not fired as a side effect.
+func (h *host) beginConnecting(title, msg string, cancel context.CancelFunc) {
+	if h == nil {
+		return
+	}
+	h.hideConnectingDialog()
+	h.beginConnectUI()
+	if h.app == nil {
+		return
+	}
+	h.connectWinAppHide.Store(false)
+	body := widget.NewLabel(msg)
+	body.Wrapping = fyne.TextWrapWord
+	w := h.app.NewWindow(title)
+	w.Resize(fyne.NewSize(440, 160))
+	cancelBtn := widget.NewButton("Cancel", func() {
+		w.Close()
+	})
+	cancelBtn.Importance = widget.MediumImportance
+	w.SetContent(container.NewPadded(container.NewBorder(
+		nil, cancelBtn, nil, nil, body,
+	)))
+	w.SetOnClosed(func() {
+		if h.connectWin == w {
+			h.connectWin = nil
+		}
+		h.endConnectUI()
+		if h.connectWinAppHide.Load() {
+			return
+		}
+		log.Printf("[dial] %s cancelled", title)
+		if cancel != nil {
+			cancel()
+		}
+	})
+	h.connectWin = w
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				crashlog.Write(ui.GetAppHome(), "connecting-dialog", r)
+				log.Printf("[dial] connecting window show recovered: %v", r)
+			}
+		}()
+		w.CenterOnScreen()
+		w.Show()
+		w.RequestFocus()
+	}()
+}
+
+func (h *host) hideConnectingDialog() {
+	if h == nil {
+		return
+	}
+	h.connectWinAppHide.Store(true)
+	if w := h.connectWin; w != nil {
+		h.connectWin = nil
+		w.Close()
+	}
+	h.endConnectUI()
+}
+
+func (h *host) suppressWindowClose(d time.Duration) {
+	if h == nil || d <= 0 {
+		return
+	}
+	until := time.Now().Add(d).UnixNano()
+	for {
+		cur := h.suppressCloseUntil.Load()
+		if cur >= until {
+			return
+		}
+		if h.suppressCloseUntil.CompareAndSwap(cur, until) {
+			return
+		}
+	}
+}
+
+func (h *host) windowCloseSuppressed() bool {
+	if h == nil {
+		return false
+	}
+	if h.connectUIOpen.Load() {
+		return true
+	}
+	return time.Now().UnixNano() < h.suppressCloseUntil.Load()
+}
+
+func teePathfinderLog() {
+	dir := ui.GetLogsDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "pathfinder.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	log.SetOutput(&syncLogWriter{f: f})
+}
+
+type syncLogWriter struct{ f *os.File }
+
+func (w *syncLogWriter) Write(p []byte) (int, error) {
+	n, err := w.f.Write(p)
+	_ = w.f.Sync()
+	return n, err
+}
+
 func (h *host) logf() func(string, ...any) { return h.logfIf(false) }
 
 // logfIf is logf with a per-run override.
@@ -506,6 +671,13 @@ func (h *host) launchTerminal(start sessions.Node) {
 // folder is the inventory path when the node came from the tree (so Save can
 // write it back). Empty means ad-hoc / Quick Connect — Connect only.
 func (h *host) launchTerminalTitled(title, folder string, start sessions.Node) {
+	log.Printf("[session-form] open %q folder=%q", title, folder)
+	defer func() {
+		if r := recover(); r != nil {
+			crashlog.Write(ui.GetAppHome(), "session-form", r)
+			log.Printf("[session-form] recovered: %v", r)
+		}
+	}()
 	var d dialog.Dialog
 	var form *ui.SessionForm
 	oldLabel := start.Normalize().Label()
@@ -599,23 +771,28 @@ func (h *host) buildSessionTree(path string) {
 	}
 
 	h.tree = ui.NewSessionTree(ui.SessionTreeOptions{
-		Window: h.win,
+		Window:     h.win,
+		RecentPath: recent.Path(ui.GetAppHome()),
 		OnActivate: func(folder string, n sessions.Node) {
+			home := ui.GetAppHome()
+			if h.tree != nil {
+				n = auvik.EnrichTunnelDomain(home, folder, n, h.tree.Tree())
+			}
+			log.Printf("[tree] activate %q in %q autologin=%v tunnel=%v", n.Label(), folder, h.canAutoLogin(n), auvik.ShouldUseTunnelFirst(n, home))
 			go func() {
-				if _, err := recent.Touch(recent.Path(ui.GetAppHome()), folder, n.Label(), n.Host); err != nil {
+				if _, err := recent.Touch(recent.Path(home), folder, n.Label(), n.Host); err != nil {
 					log.Printf("[recent] %v", err)
+				} else {
+					h.tree.RefreshRecent()
 				}
 			}()
-			// Double-click with a saved password (vault credential) skips the
-			// form and dials immediately — SecureCRT-style auto-login.
-			if h.canAutoLogin(n) {
-				label := n.Normalize().Label()
-				h.connect(folder, label, n, func(saved sessions.Node) {
-					h.applyInventoryNode(folder, label, saved)
-				})
-				return
-			}
-			h.launchTerminalTitled(n.Label(), folder, n)
+			// Double-click always dials in the background (Auvik tunnel + SSH).
+			// Missing username/password is asked at an authentication prompt
+			// during the handshake — not a session-editor popup.
+			label := n.Normalize().Label()
+			h.connect(folder, label, n, func(saved sessions.Node) {
+				h.applyInventoryNode(folder, label, saved)
+			})
 		},
 		OnNew: func(folder string, apply func(sessions.Node)) {
 			h.editSession("New session in "+folder, folder, sessions.Defaults(), apply)
@@ -626,13 +803,8 @@ func (h *host) buildSessionTree(path string) {
 		OnChanged: h.saveTree,
 	})
 	h.tree.SetTree(tr)
-	h.shell.SetSide(h.tree.Content(), 0.25)
+	h.shell.SetSide(h.tree.Content(), 0.20)
 	h.buildChrome()
-	if h.base.TroubleshootAddon {
-		h.cursorPaneVisible = true
-		h.applyCursorPane()
-	}
-
 
 	if err != nil {
 		// After the window has content, or the error has nowhere to appear.
@@ -871,29 +1043,32 @@ func (h *host) buildChrome() {
 	h.appChrome = ui.BuildAppChrome(ui.AppChromeConfig{
 		OnQuickConnect: func() { h.launchTerminal(h.node) },
 		OnCrawl:        h.launchCrawl,
+		CrawlMenu:      h.showCrawlMenu,
 		OnCapture:      h.launchCapture,
 		OnMap:          h.launchMap,
 		OnSearch:       h.launchSearch,
 		ScriptsMenu:    h.showScriptsMenu,
 		TabsMenu:       h.showTabsMenu,
 		OnSettings:     h.showSettings,
+		OnCursor: func() {
+			if !h.base.TroubleshootAddon {
+				dialog.ShowInformation("Cursor AI",
+					"Enable Troubleshoot addon in Settings → Tools, then try again.", h.win)
+				return
+			}
+			h.toggleCursorPane()
+		},
+		RecentBar:      h.tree.RecentBar(),
 		Customers:      h.customerNames(),
 		ShowSendDock:   h.hasConnectedTerminal(),
-		OnSendChat: func(text string, mode ui.ChatSendMode, customer string) {
-			h.sendChat(text, mode, customer)
-		},
-		OnAdhocConnect: h.connectAdhoc,
-		BarButtons:  btnFile.Buttons,
-		OnBarAction: func(b buttons.Button, all bool) { h.barButtonAction(b, all) },
-		OnBarEdit:   h.openButtonEditor,
-		Status:         h.shell.SummaryLabel(),
+		BarButtons:     btnFile.Buttons,
+		OnBarAction:    func(b buttons.Button, all bool) { h.barButtonAction(b, all) },
+		OnBarEdit:      h.openButtonEditor,
 		WorkContext:    h.workContextLabel,
-		ShowCursorAI:   h.base.TroubleshootAddon,
-		CursorAIOpen:   h.cursorPaneVisible,
-		OnCursorAI:     h.toggleCursorPane,
 	})
 	h.shell.SetTopChrome(h.appChrome.Top())
 	h.shell.SetBottom(h.appChrome.Bottom())
+	h.shell.SetRight(nil, 0)
 	h.refreshVault()
 }
 
@@ -903,9 +1078,8 @@ func (h *host) refreshOpsChrome() {
 	}
 	h.buildChrome()
 	// Do NOT RefocusCurrentTerminal here. This runs from the connect state
-	// handler while the Connecting dialog may still be an overlay; focusing
-	// under it makes the new SSH tab permanently ignore the keyboard.
-	// Shell settle() + the focus watchdog reclaim focus once overlays clear.
+	// handler; focusing the new tab too early can make it ignore the keyboard.
+	// Shell settle() + the focus watchdog reclaim focus once Connecting is gone.
 }
 
 func (h *host) hasConnectedTerminal() bool {
@@ -998,6 +1172,12 @@ func (h *host) showScriptsMenu(anchor fyne.CanvasObject) {
 		fyne.NewMenuItem("Stop recording...", h.stopScriptRecording),
 		fyne.NewMenuItem("Run Python script...", h.runPythonScript),
 	)
+	if h.base.TroubleshootAddon {
+		menuItems = append(menuItems,
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Troubleshoot agent…", h.showTroubleshootAgent),
+		)
+	}
 	m := fyne.NewMenu("", menuItems...)
 	widget.ShowPopUpMenuAtRelativePosition(m, h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
 }
@@ -1040,6 +1220,33 @@ func (h *host) showSessionMenu(anchor fyne.CanvasObject, sess *ui.Session, inst 
 		fyne.NewMenu("", items...), h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
 }
 
+func (h *host) showCrawlMenu(anchor fyne.CanvasObject) {
+	items := []*fyne.MenuItem{
+		fyne.NewMenuItem("Discover network…", h.launchCrawl),
+		fyne.NewMenuItem("Customer crawl seeds (CSV)…", h.importCustomerCrawlCSV),
+	}
+	if h.tree != nil {
+		if folder, n, ok := h.tree.Selected(); ok && strings.TrimSpace(n.Host) != "" {
+			host := n.Host
+			label := n.Label()
+			customer := sessions.CustomerOfFolder(folder)
+			items = append(items, fyne.NewMenuItem("Crawl from "+label+"…", func() {
+				h.launchCrawlPrefill(customer, []string{host})
+			}))
+		}
+	}
+	widget.ShowPopUpMenuAtRelativePosition(
+		fyne.NewMenu("", items...), h.win.Canvas(), fyne.NewPos(0, anchor.Size().Height), anchor)
+}
+
+func (h *host) filterSessionTree(text string) {
+	if h.tree == nil {
+		return
+	}
+	h.tree.SetFilterText(text)
+	h.tree.FocusFilter()
+}
+
 func (h *host) showImportMenu(anchor fyne.CanvasObject) {
 	items := []*fyne.MenuItem{
 		fyne.NewMenuItem("Session YAML…", h.importSessions),
@@ -1055,7 +1262,10 @@ func (h *host) showImportMenu(anchor fyne.CanvasObject) {
 func (h *host) buildMenu() { h.buildChrome() }
 
 func (h *host) currentTerminal() *ui.Session {
-	inst := h.shell.Current()
+	if h.shell == nil {
+		return nil
+	}
+	inst := h.shell.ActiveTerminal()
 	if inst == nil {
 		return nil
 	}
@@ -1064,6 +1274,21 @@ func (h *host) currentTerminal() *ui.Session {
 		return nil
 	}
 	return ta.sess
+}
+
+func (h *host) activeSessionContext() string {
+	if h.shell == nil {
+		return ui.FormatActiveContext("", "", "", "", false)
+	}
+	inst := h.shell.ActiveTerminal()
+	if inst == nil {
+		return ui.FormatActiveContext("", "", "", "", false)
+	}
+	ta, ok := inst.Applet().(*termApplet)
+	if !ok || ta.sess == nil {
+		return ui.FormatActiveContext(inst.Title(), "", "", "", false)
+	}
+	return ui.FormatActiveContext(inst.Title(), ta.customer, ta.folder, ta.sess.TargetLabel(), true)
 }
 
 func (h *host) toggleCurrentCapture() {
@@ -1614,8 +1839,10 @@ func (h *host) runPythonScript() {
 	}
 	if len(catalog) > 0 {
 		labels := make([]string, len(catalog))
+		pathByLabel := map[string]string{}
 		for i, p := range catalog {
 			labels[i] = filepath.Base(p)
+			pathByLabel[labels[i]] = p
 		}
 		sel := widget.NewSelect(labels, nil)
 		sel.SetSelected(labels[0])
@@ -1626,13 +1853,28 @@ func (h *host) runPythonScript() {
 		dialog.ShowCustom("Run Python script", "Close", container.NewVBox(
 			body,
 			widget.NewButton("Run selected", func() {
+				if p, ok := pathByLabel[sel.Selected]; ok {
+					h.runPythonScriptPath(sess, p)
+				}
+			}),
+			widget.NewButton("Open scripts folder", func() {
+				_ = ui.RevealInFileManager(pyscripts.Dir(ui.GetAppHome()))
+			}),
+			widget.NewButton("Delete selected from catalog", func() {
 				name := sel.Selected
-				for _, p := range catalog {
-					if filepath.Base(p) == name {
-						h.runPythonScriptPath(sess, p)
+				if name == "" {
+					return
+				}
+				dialog.ShowConfirm("Delete script", "Remove "+name+" from the catalog?", func(ok bool) {
+					if !ok {
 						return
 					}
-				}
+					if err := pyscripts.Delete(ui.GetAppHome(), name); err != nil {
+						dialog.ShowError(err, h.win)
+						return
+					}
+					dialog.ShowInformation("Python", "Deleted "+name, h.win)
+				}, h.win)
 			}),
 			widget.NewButton("Browse for file…", func() { h.runPythonScriptBrowse(sess) }),
 		), h.win)
@@ -1652,7 +1894,17 @@ func (h *host) runPythonScriptBrowse(sess *ui.Session) {
 		}
 		path := uc.URI().Path()
 		_ = uc.Close()
-		h.runPythonScriptPath(sess, path)
+		dialog.ShowConfirm("Save to catalog?", "Copy this script into the catalog for next time?", func(ok bool) {
+			if ok {
+				if saved, err := pyscripts.ImportCopy(ui.GetAppHome(), path); err != nil {
+					dialog.ShowError(err, h.win)
+					return
+				} else {
+					path = saved
+				}
+			}
+			h.runPythonScriptPath(sess, path)
+		}, h.win)
 	}, h.win)
 	open.SetFilter(storage.NewExtensionFileFilter([]string{".py"}))
 	open.Resize(fyne.NewSize(820, 600))
@@ -1822,58 +2074,74 @@ func (h *host) showCursorAccount() {
 	ui.ShowCursorAccountDialog(h.win, h.base.CursorAPIKey)
 }
 
-// refreshTroubleshootChrome rebuilds the ribbon when the addon toggles.
+// refreshTroubleshootChrome rebuilds the dock when the addon toggles.
 func (h *host) refreshTroubleshootChrome() {
 	if h.shell == nil {
 		return
 	}
 	h.buildChrome()
-	h.applyCursorPane()
 	if c := h.shell.Content(); c != nil {
 		c.Refresh()
 	}
 }
 
-func (h *host) toggleCursorPane() {
-	if !h.base.TroubleshootAddon {
-		dialog.ShowInformation("Cursor AI",
-			"Enable Troubleshoot addon in Settings → Tools first.", h.win)
-		return
+func (h *host) refreshCursorAsk() {
+	if h.cursorAsk != nil {
+		h.cursorAsk.Refresh()
 	}
-	h.cursorPaneVisible = !h.cursorPaneVisible
-	h.buildChrome()
-	h.applyCursorPane()
+}
+
+func (h *host) toggleCursorPane() {
+	h.openCursorWindow()
 }
 
 func (h *host) applyCursorPane() {
-	if h.shell == nil {
-		return
-	}
-	if !h.base.TroubleshootAddon || !h.cursorPaneVisible {
+	// Cursor is a separate popup window — never dock into the main shell.
+	if h.shell != nil {
 		h.shell.SetRight(nil, 0)
-		return
 	}
-	if h.cursorPane == nil {
-		h.cursorPane = ui.NewCursorPane(h.win, h.cursorPaneHooks())
+	if !h.base.TroubleshootAddon {
+		h.closeCursorWindow()
 	}
-	off := h.shell.RightOffset()
-	if off <= 0 {
-		off = 0.72
-	}
-	h.shell.SetRight(h.cursorPane, off)
 }
 
-func (h *host) activeSessionContext() string {
-	inst := h.shell.Current()
-	if inst == nil {
-		return ui.FormatActiveContext("", "", "", "", false)
+func (h *host) closeCursorWindow() {
+	if h.cursorWin != nil {
+		h.cursorWin.Close()
+		h.cursorWin = nil
 	}
-	ta, ok := inst.Applet().(*termApplet)
-	if !ok || ta.sess == nil {
-		return ui.FormatActiveContext(inst.Title(), "", "", "", false)
-	}
-	return ui.FormatActiveContext(inst.Title(), ta.customer, ta.folder, ta.sess.TargetLabel(), true)
+	h.cursorAsk = nil
 }
+
+func (h *host) openCursorWindow() {
+	if !h.base.TroubleshootAddon {
+		dialog.ShowInformation("Cursor AI",
+			"Enable Troubleshoot addon in Settings → Tools, then try again.", h.win)
+		return
+	}
+	if h.shell != nil {
+		h.shell.SetRight(nil, 0)
+	}
+	if h.cursorWin != nil {
+		if h.cursorAsk != nil {
+			h.cursorAsk.Refresh()
+		}
+		h.cursorWin.Show()
+		h.cursorWin.RequestFocus()
+		return
+	}
+	w := h.app.NewWindow("Cursor AI — PathfinderSSH")
+	w.Resize(fyne.NewSize(440, 680))
+	h.cursorAsk = ui.NewCursorAskPane(w, h.cursorPaneHooks())
+	w.SetContent(container.NewPadded(h.cursorAsk.Content()))
+	w.SetOnClosed(func() {
+		h.cursorWin = nil
+		h.cursorAsk = nil
+	})
+	h.cursorWin = w
+	w.Show()
+}
+
 
 func (h *host) gatherScrollback(all bool) (string, error) {
 	if !all {
@@ -1901,22 +2169,41 @@ func (h *host) gatherScrollback(all bool) (string, error) {
 }
 
 func (h *host) sendToActiveSession(cmd string) error {
-	if !h.shell.SendToActive(cmd) {
-		return fmt.Errorf("no active terminal or send rejected")
+	if h.shell == nil {
+		return fmt.Errorf("no shell")
 	}
+	if !h.shell.SendToActive(cmd) {
+		return fmt.Errorf("no active terminal or send rejected — select an SSH tab first")
+	}
+	h.shell.RefocusCurrentTerminal()
 	return nil
 }
 
 func (h *host) askCursorAgent(prompt string) (string, error) {
+	if strings.TrimSpace(cursorapi.ResolveKey(h.base.CursorAPIKey)) == "" {
+		return "", fmt.Errorf("no Cursor API key — Settings → Tools")
+	}
+	repo := strings.TrimSpace(h.base.CursorRepo)
+	if repo == "" {
+		repo = "https://github.com/AgenticOp-io/pathfinderssh-msp"
+	}
+	ref := strings.TrimSpace(h.base.CursorRepoRef)
+	if ref == "" {
+		ref = "main"
+	}
 	cli := cursorapi.New(h.base.CursorAPIKey)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	out, err := cli.CreateAgent(ctx, cursorapi.CreateAgentRequest{
 		Prompt: cursorapi.CreatePrompt{Text: prompt},
 		Name:   "PathfinderSSH troubleshoot",
+		Repos: []cursorapi.RepoSpec{{
+			URL:         repo,
+			StartingRef: ref,
+		}},
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w\n\nCloud Agents create failed (key works for account, but launch was rejected).\nCheck Cloud Agents access + GitHub at https://cursor.com/dashboard\nRepo used: %s @ %s", err, repo, ref)
 	}
 	msg := fmt.Sprintf("Agent %s (%s) · run %s (%s)",
 		out.Agent.ID, out.Agent.Status, out.Run.ID, out.Run.Status)
@@ -1931,20 +2218,7 @@ func (h *host) cursorPaneHooks() ui.CursorPaneHooks {
 		APIKey:           h.base.CursorAPIKey,
 		ActiveContext:    h.activeSessionContext,
 		GatherScrollback: h.gatherScrollback,
-		SendToActive:     h.sendToActiveSession,
-		ScriptNames: func() []string {
-			f := h.loadScripts()
-			names := make([]string, 0, len(f.Scripts))
-			for _, s := range f.Scripts {
-				names = append(names, s.Name)
-			}
-			return names
-		},
-		RunScript: func(name string) error {
-			h.runNamedScript(name)
-			return nil
-		},
-		AskCursor: h.askCursorAgent,
+		AskCursor:        h.askCursorAgent,
 	}
 }
 
@@ -2279,6 +2553,11 @@ func (h *host) auvikUseTunnelDefault() bool {
 func (h *host) runAuvikSyncAll(interactive bool) {
 	go func() {
 		home := ui.GetAppHome()
+		defer func() {
+			if r := recover(); r != nil {
+				crashlog.Write(home, "auvik-sync", r)
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		synclog.Info(home, "auvik", "", "sync ALL start", "")
@@ -2308,14 +2587,14 @@ func (h *host) runAuvikSyncAll(interactive bool) {
 			if agg.Changed {
 				log.Printf("[auvik] background sync: %s", agg.Summary)
 			}
-			if h.shell != nil && h.shell.SummaryLabel() != nil {
+			if h.appChrome != nil {
 				note := "Auvik sync OK"
 				if agg.ErrCount > 0 {
 					note = fmt.Sprintf("Auvik sync: %d error(s) — open MSP sync log", agg.ErrCount)
 				} else if agg.Changed {
 					note = "Auvik sync: " + strings.Split(agg.Summary, "\n")[0]
 				}
-				h.shell.SummaryLabel().SetText(note)
+				h.appChrome.SetStatusNote(note)
 			}
 		})
 	}()
@@ -2416,8 +2695,15 @@ func (h *host) releaseAuvikTunnelForNode(n sessions.Node) {
 	h.auvikTunnels.Release(domain, deviceIP, remotePort)
 }
 
-func (h *host) tryAuvikTunnelConnect(ctx context.Context, node sessions.Node, opts sessiondial.Options) (term.Transport, error) {
+func (h *host) tryAuvikTunnelConnect(ctx context.Context, node sessions.Node, opts sessiondial.Options) (tp term.Transport, err error) {
 	home := ui.GetAppHome()
+	defer func() {
+		if r := recover(); r != nil {
+			crashlog.Write(home, "auvik-tunnel", r)
+			tp = nil
+			err = crashlog.Error("opening the Auvik tunnel", r)
+		}
+	}()
 	if h.auvikTunnels == nil {
 		h.auvikTunnels = auvik.NewTunnelManager(h.base.AuvikTunnelPath)
 	}
@@ -2439,7 +2725,7 @@ func (h *host) tryAuvikTunnelConnect(ctx context.Context, node sessions.Node, op
 	local, err := h.auvikTunnels.Ensure(ctx, domain, deviceIP, remotePort, node.AuvikTunnelPort)
 	if err != nil {
 		synclog.Error(home, "auvik-tunnel", domain, "tunnel failed", err.Error())
-		return nil, err
+		return nil, fmt.Errorf("Auvik tunnel did not come up for %s:%d", deviceIP, remotePort)
 	}
 	tunOpts := opts
 	tunOpts.SkipReachCheck = true
@@ -2449,24 +2735,33 @@ func (h *host) tryAuvikTunnelConnect(ctx context.Context, node sessions.Node, op
 	// Auvik already authenticated the control plane; auto-TOFU on first contact
 	// (still fail-closed on key mismatch against a pinned device identity).
 	tunOpts.HostKeyPrompt = func(hostname string, remote net.Addr, key ssh.PublicKey) (bool, error) {
+		if key == nil {
+			return false, fmt.Errorf("host key missing from %s", hostname)
+		}
+		remoteStr := ""
+		if remote != nil {
+			remoteStr = remote.String()
+		}
 		log.Printf("[hostkey] auto-accepted via Auvik tunnel: %s (%s) %s %s",
-			hostname, remote, key.Type(), ssh.FingerprintSHA256(key))
+			hostname, remoteStr, key.Type(), ssh.FingerprintSHA256(key))
 		return true, nil
 	}
 	tunNode := auvik.DialNodeViaTunnel(node, local)
 	log.Printf("[auvik] tunnel localhost:%d → %s:%d (%s)", local, deviceIP, remotePort, domain)
 	synclog.Info(home, "auvik-tunnel", domain,
 		fmt.Sprintf("SSH via localhost:%d → %s:%d", local, deviceIP, remotePort), node.Label())
-	tp, err := sessiondial.Connect(ctx, tunNode, tunOpts)
-	if err != nil && tunnelSSHLooksDead(err) {
+	tp, err = sessiondial.Connect(ctx, tunNode, tunOpts)
+	if err != nil && tunnelSSHLooksDead(err) && ctx.Err() == nil {
 		// Cached/orphan tunnel accepted TCP but did not forward SSH — recycle once.
 		log.Printf("[auvik] SSH via tunnel dead (%v) — restarting tunnel", err)
 		synclog.Warn(home, "auvik-tunnel", domain, "SSH via tunnel dead, restarting", err.Error())
 		h.auvikTunnels.Invalidate(domain, deviceIP, remotePort)
-		local, err = h.auvikTunnels.Ensure(ctx, domain, deviceIP, remotePort, node.AuvikTunnelPort)
+		retryCtx, retryCancel := context.WithTimeout(ctx, 30*time.Second)
+		local, err = h.auvikTunnels.Ensure(retryCtx, domain, deviceIP, remotePort, node.AuvikTunnelPort)
+		retryCancel()
 		if err != nil {
 			synclog.Error(home, "auvik-tunnel", domain, "tunnel restart failed", err.Error())
-			return nil, err
+			return nil, fmt.Errorf("device did not answer through the Auvik tunnel (offline or SSH closed)")
 		}
 		tunNode = auvik.DialNodeViaTunnel(node, local)
 		tp, err = sessiondial.Connect(ctx, tunNode, tunOpts)
@@ -2475,6 +2770,9 @@ func (h *host) tryAuvikTunnelConnect(ctx context.Context, node sessions.Node, op
 		// Ensure acquired a ref; drop it so a failed dial does not leave the tunnel up.
 		h.auvikTunnels.Release(domain, deviceIP, remotePort)
 		synclog.Error(home, "auvik-tunnel", domain, "SSH via tunnel failed", err.Error())
+		if ctx.Err() == nil && tunnelSSHLooksDead(err) {
+			return nil, fmt.Errorf("device did not answer through the Auvik tunnel — offline, filtered, or SSH not running on port %d", remotePort)
+		}
 	}
 	return tp, err
 }
@@ -2493,6 +2791,21 @@ func tunnelSSHLooksDead(err error) bool {
 		}
 	}
 	return false
+}
+
+func clipUIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	s := strings.ReplaceAll(err.Error(), "\r", "")
+	const max = 600
+	if len(s) <= max {
+		if s == err.Error() {
+			return err
+		}
+		return errors.New(s)
+	}
+	return fmt.Errorf("%s\n… (see Sync log for detail)", s[:max])
 }
 
 // importMap turns a crawl's map.json into sessions under Customers/<name>/….
@@ -2650,7 +2963,9 @@ func (h *host) applyImport(tr sessions.Tree, format sessions.Format, sum session
 		}
 	}
 	if format == sessions.FormatNative && (sum.Skipped > 0 || len(sum.Renamed) > 0 || len(sum.Rejected) > 0 || len(sum.Results) > 1) {
-		ui.ShowImportMergeReport(h.win, "Imported "+format.String(), sum)
+		ui.ShowImportMergeReport(h.win, "Imported "+format.String(), sum, ui.ImportMergeOptions{
+			OnFilterTree: h.filterSessionTree,
+		})
 		return
 	}
 	dialog.ShowInformation("Imported "+format.String(), msg, h.win)
@@ -2703,51 +3018,23 @@ func (h *host) exportSessions() {
 }
 
 func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(sessions.Node)) {
-	// ctx is created here so Cancel can reach it. 90s is the unattended ceiling.
+	defer func() {
+		if r := recover(); r != nil {
+			crashlog.Write(ui.GetAppHome(), "connect", r)
+			log.Printf("[dial] recovered in connect(): %v", r)
+		}
+	}()
+	log.Printf("[dial] start %s folder=%q label=%q", n.Target(), folder, n.Label())
+
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-
-	// Fyne Hide() always fires OnClosed. Store the dial result before Hide so
-	// OnClosed shows the error (or mounts) only after Connecting is gone.
-	// Hide+ShowError in the same tick logs Fyne overlay errors and can lock UI.
-	type dialOutcome struct {
-		err      error
-		tp       term.Transport
-		dialNode sessions.Node
+	var tr sessions.Tree
+	if h.tree != nil {
+		tr = h.tree.Tree()
 	}
-	var (
-		cancelled atomic.Bool
-		outcome   atomic.Pointer[dialOutcome]
-	)
-
-	progress := dialog.NewCustom("Connecting", "Cancel",
-		widget.NewLabel(connectStatusLabel(folder, n, h.tree.Tree())), h.win)
-	progress.SetOnClosed(func() {
-		if o := outcome.Load(); o != nil {
-			if o.err != nil {
-				log.Printf("[dial] %v", o.err)
-				title := o.dialNode.Label()
-				if title == "" {
-					title = "Session"
-				}
-				ed := dialog.NewError(o.err, h.win)
-				ed.SetOnClosed(func() {
-					h.launchTerminalTitled(title, folder, o.dialNode)
-				})
-				ed.Show()
-				return
-			}
-			if persist != nil {
-				persist(o.dialNode)
-			}
-			h.mountTerminal(o.dialNode, o.tp)
-			return
-		}
-		if cancelled.CompareAndSwap(false, true) {
-			log.Printf("[dial] cancelled by operator: %s", n.Target())
-			cancel()
-		}
-	})
-	progress.Show()
+	h.beginConnecting("Connecting", connectStatusLabel(folder, n, tr), cancel)
+	if h.win != nil {
+		h.win.SetTitle("PathfinderSSH MSP — Connecting " + n.Label() + "…")
+	}
 
 	node := n
 	opts := sessiondial.Options{
@@ -2759,15 +3046,26 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 		AuthPrompt: func(prompt string, echo bool) (string, error) {
 			return h.promptSecret(folder, oldLabel, &node, prompt, echo)
 		},
+		PromptLogin: func() (string, string, error) {
+			return h.promptLogin(folder, oldLabel, &node)
+		},
 		Log: log.Printf,
 	}
 
 	go func() {
 		defer cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				crashlog.Write(ui.GetAppHome(), "connect-goroutine", r)
+				fyne.Do(func() { h.finishConnect(crashlog.Error("connecting", r), nil, node, persist) })
+			}
+		}()
 
 		dialNode := node
 		home := ui.GetAppHome()
-		dialNode = auvik.EnrichTunnelDomain(home, folder, dialNode, h.tree.Tree())
+		if h.tree != nil {
+			dialNode = auvik.EnrichTunnelDomain(home, folder, dialNode, h.tree.Tree())
+		}
 		var tp term.Transport
 		var err error
 		if auvik.ShouldUseTunnelFirst(dialNode, home) {
@@ -2787,7 +3085,7 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 					"connect failed (tunnel not used)", err.Error())
 			}
 		}
-		if err != nil && folder != "" && strings.TrimSpace(node.ConsoleFallback) != "" {
+		if err != nil && folder != "" && strings.TrimSpace(node.ConsoleFallback) != "" && h.tree != nil {
 			if fb, ok := h.tree.Tree().SessionInFolder(folder, node.ConsoleFallback); ok {
 				log.Printf("[dial] %v — trying console fallback %s", err, fb.Label())
 				tp, err = sessiondial.Connect(ctx, fb, opts)
@@ -2796,18 +3094,65 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 				}
 			}
 		}
-		fyne.Do(func() {
-			if cancelled.Load() {
-				if tp != nil {
-					_ = tp.Close()
-					h.releaseAuvikTunnelForNode(dialNode)
-				}
-				return
-			}
-			outcome.Store(&dialOutcome{err: err, tp: tp, dialNode: dialNode})
-			progress.Hide()
-		})
+		if u := strings.TrimSpace(node.Username); u != "" {
+			dialNode.Username = u
+		}
+		if c := strings.TrimSpace(node.Credential); c != "" {
+			dialNode.Credential = c
+		}
+		fyne.Do(func() { h.finishConnect(err, tp, dialNode, persist) })
 	}()
+}
+
+func (h *host) finishConnect(err error, tp term.Transport, dialNode sessions.Node, persist func(sessions.Node)) {
+	defer func() {
+		if r := recover(); r != nil {
+			crashlog.Write(ui.GetAppHome(), "finish-connect", r)
+			log.Printf("[dial] recovered in finishConnect: %v", r)
+			if tp != nil {
+				_ = tp.Close()
+			}
+		}
+	}()
+	h.hideConnectingDialog()
+	if h.win != nil {
+		h.win.SetTitle("PathfinderSSH MSP")
+	}
+	if err != nil {
+		if tp != nil {
+			_ = tp.Close()
+			h.releaseAuvikTunnelForNode(dialNode)
+		}
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			h.showConnectError(err)
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			h.showConnectError(fmt.Errorf("timed out connecting to %s", dialNode.Label()))
+		}
+		return
+	}
+	if tp == nil {
+		h.showConnectError(fmt.Errorf("connection produced no session"))
+		return
+	}
+	if persist != nil {
+		persist(dialNode)
+	}
+	h.mountTerminal(dialNode, tp)
+}
+
+func (h *host) showConnectError(err error) {
+	if err == nil {
+		return
+	}
+	log.Printf("[dial] %v", err)
+	defer func() {
+		if r := recover(); r != nil {
+			crashlog.Write(ui.GetAppHome(), "show-error", r)
+		}
+	}()
+	if h.win != nil {
+		dialog.ShowError(clipUIError(err), h.win)
+	}
 }
 
 
@@ -2858,50 +3203,15 @@ func (h *host) reconnectTerminal(sess *ui.Session, inst *ui.Instance, folder str
 	if sess == nil {
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			crashlog.Write(ui.GetAppHome(), "reconnect", r)
+			log.Printf("[reconnect] recovered: %v", r)
+		}
+	}()
+	log.Printf("[reconnect] start %s", n.Target())
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-
-	type dialOutcome struct {
-		err      error
-		tp       term.Transport
-		dialNode sessions.Node
-	}
-	var (
-		cancelled atomic.Bool
-		outcome   atomic.Pointer[dialOutcome]
-	)
-
-	progress := dialog.NewCustom("Reconnecting", "Cancel",
-		widget.NewLabel("Reconnecting "+n.Label()+"…"), h.win)
-	progress.SetOnClosed(func() {
-		if o := outcome.Load(); o != nil {
-			if o.err != nil {
-				log.Printf("[reconnect] %v", o.err)
-				dialog.ShowError(o.err, h.win)
-				if inst != nil {
-					inst.SetStatus(n.Target() + " — Disconnected")
-				}
-				return
-			}
-			if err := sess.Reattach(o.tp); err != nil {
-				_ = o.tp.Close()
-				h.releaseAuvikTunnelForNode(o.dialNode)
-				dialog.ShowError(err, h.win)
-				return
-			}
-			if inst != nil {
-				inst.SetStatus(n.Target() + " — Connected")
-			}
-			h.refreshOpsChrome()
-			h.shell.EnsureTerminalFocus()
-			log.Printf("[reconnect] ok %s", n.Target())
-			return
-		}
-		if cancelled.CompareAndSwap(false, true) {
-			log.Printf("[reconnect] cancelled: %s", n.Target())
-			cancel()
-		}
-	})
-	progress.Show()
+	h.beginConnecting("Reconnecting", "Reconnecting "+n.Label()+"…", cancel)
 	if inst != nil {
 		inst.SetStatus(n.Target() + " — Reconnecting")
 	}
@@ -2916,14 +3226,25 @@ func (h *host) reconnectTerminal(sess *ui.Session, inst *ui.Instance, folder str
 		AuthPrompt: func(prompt string, echo bool) (string, error) {
 			return h.promptSecret(folder, n.Label(), &node, prompt, echo)
 		},
+		PromptLogin: func() (string, string, error) {
+			return h.promptLogin(folder, n.Label(), &node)
+		},
 		Log: log.Printf,
 	}
 
 	go func() {
 		defer cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				crashlog.Write(ui.GetAppHome(), "reconnect-goroutine", r)
+				fyne.Do(func() { h.finishReconnect(sess, inst, crashlog.Error("reconnecting", r), nil, node) })
+			}
+		}()
 		dialNode := node
 		home := ui.GetAppHome()
-		dialNode = auvik.EnrichTunnelDomain(home, folder, dialNode, h.tree.Tree())
+		if h.tree != nil {
+			dialNode = auvik.EnrichTunnelDomain(home, folder, dialNode, h.tree.Tree())
+		}
 		h.releaseAuvikTunnelForNode(dialNode)
 		var tp term.Transport
 		var err error
@@ -2938,22 +3259,70 @@ func (h *host) reconnectTerminal(sess *ui.Session, inst *ui.Instance, folder str
 				tp, err = h.tryAuvikTunnelConnect(ctx, dialNode, opts)
 			}
 		}
-		fyne.Do(func() {
-			if cancelled.Load() {
-				if tp != nil {
-					_ = tp.Close()
-					h.releaseAuvikTunnelForNode(dialNode)
-				}
-				return
-			}
-			outcome.Store(&dialOutcome{err: err, tp: tp, dialNode: dialNode})
-			progress.Hide()
-		})
+		fyne.Do(func() { h.finishReconnect(sess, inst, err, tp, dialNode) })
 	}()
+}
+
+func (h *host) finishReconnect(sess *ui.Session, inst *ui.Instance, err error, tp term.Transport, dialNode sessions.Node) {
+	defer func() {
+		if r := recover(); r != nil {
+			crashlog.Write(ui.GetAppHome(), "finish-reconnect", r)
+		}
+	}()
+	h.hideConnectingDialog()
+	if err != nil {
+		if tp != nil {
+			_ = tp.Close()
+			h.releaseAuvikTunnelForNode(dialNode)
+		}
+		if !errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.DeadlineExceeded) {
+				h.showConnectError(fmt.Errorf("timed out reconnecting to %s", dialNode.Label()))
+			} else {
+				h.showConnectError(err)
+			}
+		}
+		if inst != nil {
+			inst.SetStatus(dialNode.Target() + " — Disconnected")
+		}
+		return
+	}
+	if tp == nil {
+		h.showConnectError(fmt.Errorf("reconnect produced no session"))
+		if inst != nil {
+			inst.SetStatus(dialNode.Target() + " — Disconnected")
+		}
+		return
+	}
+	if err := sess.Reattach(tp); err != nil {
+		_ = tp.Close()
+		h.releaseAuvikTunnelForNode(dialNode)
+		h.showConnectError(err)
+		return
+	}
+	if inst != nil {
+		inst.SetStatus(dialNode.Target() + " — Connected")
+	}
+	h.refreshOpsChrome()
+	h.shell.EnsureTerminalFocus()
+	log.Printf("[reconnect] ok %s", dialNode.Target())
 }
 
 
 func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
+	defer func() {
+		if r := recover(); r != nil {
+			crashlog.Write(ui.GetAppHome(), "mount-terminal", r)
+			log.Printf("[attach] recovered: %v", r)
+			if tp != nil {
+				_ = tp.Close()
+			}
+		}
+	}()
+	if tp == nil {
+		h.showConnectError(fmt.Errorf("no connection to attach"))
+		return
+	}
 	// The settings dance, and the reason it is a dance: Settings are
 	// process-wide, and the terminal widget reads FontSize and
 	// ScrollbackLines at construction. So install this session's values,
@@ -2978,9 +3347,9 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 
 	if err := sess.Attach(tp); err != nil {
 		log.Printf("[attach] %v", err)
-		tp.Close()
+		_ = tp.Close()
 		h.releaseAuvikTunnelForNode(n)
-		dialog.ShowError(err, h.win)
+		dialog.ShowError(clipUIError(err), h.win)
 		return
 	}
 
@@ -3132,15 +3501,12 @@ func (h *host) mountTerminal(n sessions.Node, tp term.Transport) {
 	// Attach emits StateConnected before the handler above is registered, so
 	// the bottom button dock would stay hidden until disconnect.
 	h.refreshOpsChrome()
-	// Force keyboard onto this terminal once the Connecting overlay is gone.
-	// Without this, settle can finish under the dialog and leave focus on the
-	// session tree — a live prompt that ignores every key.
+	// Force keyboard onto this terminal once the Connecting popup is gone.
 	h.shell.EnsureTerminalFocus()
 
-	// Do not Canvas.Focus / GrabFocus here. The Connecting dialog's Hide may
-	// still leave an overlay on this frame; focusing under an overlay lands
-	// keys in the wrong focus manager and the terminal looks dead. Shell
-	// settle() and EnsureTerminalFocus wait for overlays to clear first.
+	// Do not Canvas.Focus / GrabFocus here. Connecting used to be a modal
+	// overlay; settle() and EnsureTerminalFocus still wait for leftover
+	// overlays before grabbing keys so the terminal does not look dead.
 }
 
 // termApplet is the whole adapter. A terminal has no redraw loop to gate -- it
@@ -3365,6 +3731,7 @@ func (h *host) startCrawl(l ui.CrawlLaunch) {
 
 	run := crawlrun.New()
 	view := ui.NewCrawlView(run)
+	view.SetMergeFilterTreeHook(h.filterSessionTree)
 
 	// The loop the shell exists to close: a device in a crawl result is a
 	// device you can open a session to without retyping it.
@@ -3618,7 +3985,7 @@ func (h *host) launchMap() {
 // be built or maintained here. What stays in the application is the part only
 // the application can do — knowing which device a node is, and opening a
 // session to it.
-func (h *host) openMap(f mapweb.MapFile) {
+func (h *host) openMap(f mapweb.MapFile, pollSec ...int) {
 	data, err := os.ReadFile(f.Path)
 	if err != nil {
 		dialog.ShowError(err, h.win)
@@ -3646,6 +4013,11 @@ func (h *host) openMap(f mapweb.MapFile) {
 	if err != nil {
 		dialog.ShowError(err, h.win)
 		return
+	}
+	if len(pollSec) > 0 && pollSec[0] > 0 {
+		q := u.Query()
+		q.Set("poll", strconv.Itoa(pollSec[0]))
+		u.RawQuery = q.Encode()
 	}
 	if err := h.app.OpenURL(u); err != nil {
 		// Not fatal: the server is up and the URL is valid, so give it
@@ -4121,13 +4493,24 @@ var version = "0.93"
 // dialog that appears to work and silently does not persist is worse than one
 // that says the disk is full.
 func (h *host) showSettings() {
+	if h.settingsWin != nil {
+		h.settingsWin.Show()
+		h.settingsWin.RequestFocus()
+		return
+	}
 	// Prefer disk so a prior save is not overwritten by a stale in-memory base
 	// (e.g. after another code path wrote settings.json).
 	if loaded, err := ui.LoadSettings(h.settingsPath); err == nil {
 		h.base = loaded
 		ui.SetSettings(loaded)
 	}
-	ui.ShowSettings(h.win, ui.SettingsFormOptions{
+	owner := func() fyne.Window {
+		if h.settingsWin != nil {
+			return h.settingsWin
+		}
+		return h.win
+	}
+	h.settingsWin = ui.ShowSettings(h.app, ui.SettingsFormOptions{
 		Settings:               h.base,
 		Paths:                  h.hostPaths(),
 		MSPIntegrationsEnabled: h.mspIntegrationsEnabled(),
@@ -4138,9 +4521,16 @@ func (h *host) showSettings() {
 		OnImportMap:            h.importMap,
 		OnImportCRT:            h.importSecureCRT,
 		OnImportCrawlCSV:       h.importCustomerCrawlCSV,
-		OnHelpQuickstart:       func() { ui.ShowHelp(h.win, helpdoc.TopicQuickstart) },
-		OnHelpContents:         func() { ui.ShowHelp(h.win, "") },
-		OnAbout:                h.showAbout,
+		OnHelpQuickstart:       func() { ui.ShowHelp(owner(), helpdoc.TopicQuickstart) },
+		OnHelpContents:         func() { ui.ShowHelp(owner(), "") },
+		OnAbout: func() {
+			ui.ShowAbout(owner(), ui.AboutInfo{
+				Name:    ui.DefaultAppName,
+				Tagline: "MSP fork of PathfinderSSH (GPL-3.0). Upstream by Scott Peterman.",
+				Version: version,
+				Details: h.hostPaths(),
+			})
+		},
 		OnSave: func(s ui.Settings) {
 			// Always reinstall the chrome theme so TreeExpandStyle icon remaps
 			// take effect (Icon() reads CurrentSettings).
@@ -4148,11 +4538,8 @@ func (h *host) showSettings() {
 			wasAddon := h.base.TroubleshootAddon
 			h.base = s
 			ui.SetSettings(s)
-			if s.TroubleshootAddon && !wasAddon {
-				h.cursorPaneVisible = true
-			}
-			if !s.TroubleshootAddon {
-				h.cursorPaneVisible = false
+			if s.TroubleshootAddon != wasAddon {
+				h.closeCursorWindow()
 			}
 			h.refreshTroubleshootChrome()
 			// Persist synchronously. Async save looked responsive but lost
@@ -4178,8 +4565,14 @@ func (h *host) showSettings() {
 				h.auvikTunnels.SetCredentials(h.base.AuvikUsername, h.base.AuvikAPIKey, h.base.AuvikBaseURL)
 			}
 			h.startAuvikPeriodicSync()
+			h.syncMSPBridge()
 		},
 	})
+	if h.settingsWin != nil {
+		h.settingsWin.SetOnClosed(func() {
+			h.settingsWin = nil
+		})
+	}
 }
 
 // refreshOpenTerminalScrollback applies Settings.ScrollbackLines to open
@@ -4875,10 +5268,18 @@ func authTypeName(c vault.Credential) string {
 // launched from. Called on the dial goroutine, so it hops to the UI goroutine
 // to show the dialog and blocks on the answer.
 func (h *host) promptHostKey(hostname string, remote net.Addr, key ssh.PublicKey) (bool, error) {
+	if key == nil {
+		return false, fmt.Errorf("host key missing from %s", hostname)
+	}
 	answer := make(chan bool, 1)
+	remoteStr := ""
+	if remote != nil {
+		remoteStr = remote.String()
+	}
 	msg := fmt.Sprintf("%s (%s)\n\n%s\n%s\n\nAccept and remember this key?",
-		hostname, remote, key.Type(), ssh.FingerprintSHA256(key))
+		hostname, remoteStr, key.Type(), ssh.FingerprintSHA256(key))
 	fyne.Do(func() {
+		h.hideConnectingDialog()
 		dialog.ShowConfirm("Unknown host key", msg, func(ok bool) { answer <- ok }, h.win)
 	})
 	select {
@@ -4889,6 +5290,76 @@ func (h *host) promptHostKey(hostname string, remote net.Addr, key ssh.PublicKey
 		// yes would make the policy meaningless in exactly the case
 		// where it matters.
 		return false, fmt.Errorf("host key prompt timed out")
+	}
+}
+
+// promptLogin asks for username and password together when a session names
+// neither. It is the manual-auth prompt: typeable fields, not the session
+// editor, and it runs after the Auvik tunnel has already started in the
+// background.
+func (h *host) promptLogin(folder, oldLabel string, n *sessions.Node) (string, string, error) {
+	type answer struct {
+		user string
+		pass string
+		save bool
+		ok   bool
+	}
+	ch := make(chan answer, 1)
+
+	fyne.Do(func() {
+		h.hideConnectingDialog()
+		user := widget.NewEntry()
+		user.SetPlaceHolder("admin")
+		if n != nil {
+			user.SetText(n.Username)
+		}
+		pass := widget.NewPasswordEntry()
+		pass.SetPlaceHolder("Password")
+		saveBox := widget.NewCheck("Save password for next time", nil)
+		saveBox.SetChecked(true)
+		items := []*widget.FormItem{
+			widget.NewFormItem("Username", user),
+			widget.NewFormItem("Password", pass),
+			widget.NewFormItem("", saveBox),
+		}
+		d := dialog.NewForm("Authentication", "Send", "Cancel", items,
+			func(ok bool) {
+				if !ok {
+					ch <- answer{}
+					return
+				}
+				ch <- answer{user: user.Text, pass: pass.Text, save: saveBox.Checked, ok: true}
+			}, h.win)
+		d.Resize(fyne.NewSize(460, 280))
+		d.Show()
+		ui.EnterConfirmsForm(h.win, items, d.Submit)
+	})
+
+	select {
+	case a := <-ch:
+		if !a.ok {
+			return "", "", fmt.Errorf("authentication cancelled")
+		}
+		u := strings.TrimSpace(a.user)
+		if u == "" {
+			return "", "", fmt.Errorf("username is required")
+		}
+		if n != nil {
+			n.Username = u
+			if strings.TrimSpace(a.pass) != "" {
+				n.Password = a.pass
+			}
+		}
+		if a.save && strings.TrimSpace(a.pass) != "" {
+			if h.ensureVaultUnlockedBlocking() {
+				h.persistDialPassword(folder, oldLabel, n, a.pass)
+			} else {
+				log.Printf("[vault] save skipped — vault was not unlocked")
+			}
+		}
+		return u, a.pass, nil
+	case <-time.After(120 * time.Second):
+		return "", "", fmt.Errorf("authentication prompt timed out")
 	}
 }
 
@@ -4908,9 +5379,16 @@ func (h *host) promptSecret(folder, oldLabel string, n *sessions.Node, prompt st
 	if label == "" {
 		label = "Password"
 	}
+	if echo {
+		label = strings.TrimSpace(strings.TrimSuffix(label, ":"))
+		if label == "" {
+			label = "Username"
+		}
+	}
 	canSave := !echo && passwordPromptSavable(label)
 
 	fyne.Do(func() {
+		h.hideConnectingDialog()
 		field := widget.NewPasswordEntry()
 		if echo {
 			field = widget.NewEntry()
@@ -4941,6 +5419,9 @@ func (h *host) promptSecret(folder, oldLabel string, n *sessions.Node, prompt st
 
 	select {
 	case a := <-ch:
+		if echo && n != nil && strings.TrimSpace(a.text) != "" {
+			n.Username = strings.TrimSpace(a.text)
+		}
 		if a.save && strings.TrimSpace(a.text) != "" {
 			if h.ensureVaultUnlockedBlocking() {
 				h.persistDialPassword(folder, oldLabel, n, a.text)

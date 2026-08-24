@@ -5,7 +5,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
-	"fyne.io/fyne/v2/widget"
 )
 
 func TestBuildAppChromeDoesNotPanic(t *testing.T) {
@@ -22,10 +21,7 @@ func TestBuildAppChromeDoesNotPanic(t *testing.T) {
 		ScriptsMenu:    func(fyne.CanvasObject) {},
 		TabsMenu:       func(fyne.CanvasObject) {},
 		OnSettings:     func() {},
-		OnSendChat:     func(string, ChatSendMode, string) {},
-		OnBarEdit:      func() {},
 		ShowSendDock:   true,
-		Status:         widget.NewLabel(""),
 	})
 	if ch == nil || ch.Top() == nil || ch.Bottom() == nil {
 		t.Fatal("nil chrome")

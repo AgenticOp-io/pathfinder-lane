@@ -160,18 +160,21 @@ func TestRowsCarryTheirFolderAndTarget(t *testing.T) {
 	if row.Detail == "" {
 		t.Error("no target text")
 	}
-	if f := v.Rows[FolderUID("Lab")]; !f.IsFolder || f.Detail != "2 sessions" {
+	if f := v.Rows[FolderUID("Lab")]; !f.IsFolder || f.Label != "Lab" || f.Detail != "" {
 		t.Errorf("folder row = %+v", f)
 	}
 }
 
-func TestFolderRowCountsAreSingularAtOne(t *testing.T) {
+func TestFolderRowsOmitSessionCounts(t *testing.T) {
 	v := BuildTreeView(fixture(), "")
-	if got := v.Rows[FolderUID("Core")].Detail; got != "1 session" {
-		t.Errorf("Detail = %q", got)
+	if got := v.Rows[FolderUID("Core")].Detail; got != "" {
+		t.Errorf("Detail = %q, want empty", got)
 	}
-	if got := v.Rows[FolderUID("Empty")].Detail; got != "0 sessions" {
-		t.Errorf("Detail = %q", got)
+	if got := v.Rows[FolderUID("Empty")].Detail; got != "" {
+		t.Errorf("Detail = %q, want empty", got)
+	}
+	if got := v.Rows[FolderUID("Lab")].Label; got != "Lab" {
+		t.Errorf("Label = %q, want Lab without count", got)
 	}
 }
 

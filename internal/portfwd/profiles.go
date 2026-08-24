@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const profilesFile = "port-forward-profiles.json"
@@ -60,6 +61,21 @@ func UpsertProfile(profiles []Profile, p Profile) []Profile {
 		}
 	}
 	return append(profiles, p)
+}
+
+// DeleteProfile removes a profile by name.
+func DeleteProfile(profiles []Profile, name string) []Profile {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return profiles
+	}
+	out := profiles[:0]
+	for _, p := range profiles {
+		if p.Name != name {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // SpecFromProfile converts a profile to a runtime spec.

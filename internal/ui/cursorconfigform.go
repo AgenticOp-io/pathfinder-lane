@@ -16,7 +16,7 @@ type CursorConfigForm struct {
 func NewCursorConfigForm() *CursorConfigForm {
 	f := &CursorConfigForm{
 		apiKey: widget.NewEntry(),
-		addon:  widget.NewCheck("Enable Troubleshoot addon (Cursor AI pane + Ops agent)", nil),
+		addon:  widget.NewCheck("Enable Troubleshoot addon (Ask strip + Ops agent)", nil),
 	}
 	f.apiKey.SetPlaceHolder("crsr_… or leave blank to use CURSOR_API_KEY")
 	f.apiKey.Password = true
@@ -39,7 +39,7 @@ func (f *CursorConfigForm) apply(base SettingsFields) SettingsFields {
 func (f *CursorConfigForm) Content() fyne.CanvasObject {
 	return container.NewVBox(
 		widget.NewLabelWithStyle("Cursor AI", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Gather scrollback, ask Cursor Cloud Agents, and send commands to SSH.\n"+
+		widget.NewLabel("Quiet ask+feedback strip in the bottom dock. Gathers scrollback when you ask.\n"+
 			"Prefer CURSOR_API_KEY in the environment; this field is an optional override.\n"+
 			"Create a key at cursor.com/dashboard → API Keys."),
 		widget.NewForm(

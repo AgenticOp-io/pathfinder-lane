@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 func startTunnelOS(bin string, args []string) (pid int, cmd *exec.Cmd, err error) {
@@ -39,4 +40,14 @@ func tunnelWaitUsesProcessExit() bool {
 func killSlotProcesses(workDir string) {
 	// Non-Windows: slot reuse is uncommon; best-effort no-op.
 	_ = workDir
+}
+
+func slotTunnelPID(workDir string) int {
+	_ = workDir
+	return 0
+}
+
+func hideSlotWindows(workDir string, d time.Duration) {
+	_ = workDir
+	_ = d
 }

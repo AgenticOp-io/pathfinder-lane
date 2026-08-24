@@ -210,6 +210,9 @@ func NewSession() *Session {
 // caller has already dialled, authenticated and opened the interactive
 // channel; Attach neither knows nor cares which transport it is handed.
 func (s *Session) Attach(tp term.Transport) error {
+	if tp == nil {
+		return fmt.Errorf("attach: no transport")
+	}
 	if s.screen == nil {
 		return fmt.Errorf("attach: screen not initialized")
 	}
@@ -310,6 +313,11 @@ func (s *Session) syncSize() {
 // judgement in two goroutines is how the old code ended up matching on error
 // text.
 func (s *Session) watchDone(tp term.Transport) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("recovered panic in session watchDone: %v", r)
+		}
+	}()
 	if tp == nil {
 		return
 	}
@@ -340,6 +348,11 @@ func (s *Session) watchDone(tp term.Transport) {
 // readLoop moves bytes from the transport into the VT engine until the session
 // ends or the widget is torn down.
 func (s *Session) readLoop(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("recovered panic in session read loop: %v", r)
+		}
+	}()
 	tp := s.transport()
 	if tp == nil {
 		return

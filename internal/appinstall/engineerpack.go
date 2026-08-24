@@ -51,6 +51,9 @@ func BuildEngineerPack(opts EngineerPackOptions) (installExe string, err error) 
 			return "", fmt.Errorf("copy %s: %w", tool, err)
 		}
 	}
+	if _, err := CopyAuvikTunnelSidecar(bundleDir, srcBin); err != nil {
+		return "", fmt.Errorf("copy AuvikTunnel: %w", err)
+	}
 
 	root := Root()
 	for _, pair := range []struct{ src, name string }{
@@ -103,7 +106,7 @@ Files:
   msp-security-policy.json
   msp-engineer-settings.json
   logo.png
-  bundle\pathfinder.exe, pfseed.exe
+  bundle\pathfinder.exe, pfseed.exe, AuvikTunnel.exe
 
 `, name, name)
 	if err := os.WriteFile(filepath.Join(dest, "README.txt"), []byte(readme), 0o644); err != nil {

@@ -10,8 +10,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/scottpeterman/pathfinderssh/internal/winexec"
 )
 
 const (
@@ -19,8 +20,6 @@ const (
 	// (Ensure/Release/StopAll used to wait forever on these).
 	tunnelKillTimeout  = 5 * time.Second
 	tunnelStartTimeout = 20 * time.Second
-
-	createNoWindow = 0x08000000
 )
 
 // startTunnelOS launches AuvikTunnel via PowerShell Start-Process.
@@ -47,8 +46,7 @@ func startTunnelOS(bin string, args []string) (pid int, cmd *exec.Cmd, err error
 
 	ctx, cancel := context.WithTimeout(context.Background(), tunnelStartTimeout)
 	defer cancel()
-	ps := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
-	ps.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow}
+	ps := winexec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script)
 	out, err := ps.Output()
 	if err != nil {
 		var stderr []byte
@@ -65,6 +63,7 @@ func startTunnelOS(bin string, args []string) (pid int, cmd *exec.Cmd, err error
 	if err != nil || pid <= 0 {
 		return 0, nil, fmt.Errorf("Start-Process AuvikTunnel: bad pid %q", pidStr)
 	}
+	go hideSlotWindows(filepath.Dir(bin), 4*time.Second)
 	return pid, nil, nil
 }
 
@@ -103,19 +102,49 @@ Get-CimInstance Win32_Process -Filter "Name='AuvikTunnel.exe'" | ForEach-Object 
   }
 }
 `, psSingleQuote(workDir))
-	runKillCmd(tunnelKillTimeout, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	runKillCmd(tunnelKillTimeout, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script)
 }
 
 func runKillCmd(timeout time.Duration, name string, args ...string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	c := exec.CommandContext(ctx, name, args...)
-	c.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow}
+	c := winexec.CommandContext(ctx, name, args...)
 	_ = c.Run()
 }
 
 func psSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// slotTunnelPID returns the PID of AuvikTunnel.exe running from workDir, or 0.
+func slotTunnelPID(workDir string) int {
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		return 0
+	}
+	script := fmt.Sprintf(`
+$root = [System.IO.Path]::GetFullPath(%s)
+Get-CimInstance Win32_Process -Filter "Name='AuvikTunnel.exe'" | ForEach-Object {
+  $exe = $_.ExecutablePath
+  if (-not $exe) { return }
+  try { $full = [System.IO.Path]::GetFullPath($exe) } catch { return }
+  if ($full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Output $_.ProcessId
+    break
+  }
+}
+`, psSingleQuote(workDir))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := winexec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script).Output()
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
 }
 
 func tunnelWaitUsesProcessExit() bool {

@@ -173,6 +173,8 @@ func buildSFTPBody(v *SFTPView, initDir string, initEnts []sftpclient.Entry, ini
 	status := widget.NewLabel("Ready")
 	status.Wrapping = fyne.TextWrapWord
 
+	localPane := newLocalSFTPPane("")
+
 	pathEntry := widget.NewEntry()
 	pathEntry.SetText(remoteDir)
 
@@ -292,15 +294,38 @@ func buildSFTPBody(v *SFTPView, initDir string, initEnts []sftpclient.Entry, ini
 
 	pathEntry.OnSubmitted = func(string) { refresh() }
 
-	var downloadSel func()
-	downloadSel = func() {
+	startUpload := func(local string) {
+		base := filepath.Base(local)
+		remote := sftpclient.Join(remoteDir, base)
+		var total int64
+		if st, err := os.Stat(local); err == nil {
+			total = st.Size()
+		}
+		runSFTPTransferWindow(v, w, "Upload", base, total, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
+			return cli.UploadProgress(local, remote, report, ctrl)
+		}, refresh)
+	}
+
+	downloadSel := func() {
 		if selected < 0 || selected >= len(entries) {
-			status.SetText("Select a file to download")
+			status.SetText("Select a remote file to download")
 			return
 		}
 		e := entries[selected]
 		if e.IsDir {
 			status.SetText("Download applies to files; open a directory first")
+			return
+		}
+		localDir := localPane.CurrentDir()
+		if localDir != "" {
+			local := filepath.Join(localDir, e.Name)
+			runSFTPTransferWindow(v, w, "Download", e.Name, e.Size, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
+				err := cli.DownloadProgress(e.Path, local, report, ctrl)
+				if errors.Is(err, sftpclient.ErrStopped) {
+					_ = os.Remove(local)
+				}
+				return err
+			}, func() { localPane.refresh() })
 			return
 		}
 		save := dialog.NewFileSave(func(uc fyne.URIWriteCloser, err error) {
@@ -316,7 +341,7 @@ func buildSFTPBody(v *SFTPView, initDir string, initEnts []sftpclient.Entry, ini
 			runSFTPTransferWindow(v, w, "Download", e.Name, e.Size, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
 				err := cli.DownloadProgress(e.Path, local, report, ctrl)
 				if errors.Is(err, sftpclient.ErrStopped) {
-					_ = os.Remove(local) // drop partial download
+					_ = os.Remove(local)
 				}
 				return err
 			}, nil)
@@ -341,6 +366,10 @@ func buildSFTPBody(v *SFTPView, initDir string, initEnts []sftpclient.Entry, ini
 	}
 
 	uploadFile := func() {
+		if local, ok := localPane.SelectedFile(); ok {
+			startUpload(local)
+			return
+		}
 		open := dialog.NewFileOpen(func(uc fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -351,15 +380,7 @@ func buildSFTPBody(v *SFTPView, initDir string, initEnts []sftpclient.Entry, ini
 			}
 			local := uc.URI().Path()
 			_ = uc.Close()
-			base := filepath.Base(local)
-			remote := sftpclient.Join(remoteDir, base)
-			var total int64
-			if st, err := os.Stat(local); err == nil {
-				total = st.Size()
-			}
-			runSFTPTransferWindow(v, w, "Upload", base, total, status, func(report sftpclient.ProgressFunc, ctrl *sftpclient.TransferControl) error {
-				return cli.UploadProgress(local, remote, report, ctrl)
-			}, refresh)
+			startUpload(local)
 		}, w)
 		open.Resize(fyne.NewSize(820, 600))
 		if home, err := osUserHome(); err == nil {
@@ -442,12 +463,21 @@ func buildSFTPBody(v *SFTPView, initDir string, initEnts []sftpclient.Entry, ini
 	)
 	toolbar := container.NewHBox(tools...)
 
-	body := container.NewBorder(
+	remoteBody := container.NewBorder(
 		container.NewBorder(nil, nil, widget.NewLabel("Remote"), nil, pathEntry),
-		status,
-		nil, nil,
+		nil, nil, nil,
 		container.NewBorder(toolbar, nil, nil, nil, list),
 	)
+
+	transferBar := container.NewHBox(
+		widget.NewButtonWithIcon("Upload →", theme.UploadIcon(), uploadFile),
+		widget.NewButtonWithIcon("← Download", theme.DownloadIcon(), downloadSel),
+	)
+
+	split := container.NewHSplit(localPane.Content(), remoteBody)
+	split.SetOffset(0.42)
+
+	body := container.NewBorder(transferBar, status, nil, nil, split)
 	status.SetText("Loading...")
 	return body
 }

@@ -116,6 +116,13 @@ func EnsureFrom(srcDir string) (destExe string, copied bool, err error) {
 	if bundleCopied {
 		copied = true
 	}
+	sidecarCopied, err := CopyAuvikTunnelSidecar(BinDir(), bundleDir)
+	if err != nil {
+		return destExe, copied, fmt.Errorf("install AuvikTunnel sidecar: %w", err)
+	}
+	if sidecarCopied {
+		copied = true
+	}
 	// Legacy: pfseed beside portable folder (handled by CopyToolBundle now).
 	// Always refresh LICENSE/NOTICE beside the installed exe (GPL attribution).
 	if err := InstallLegalDocs(BinDir()); err != nil {

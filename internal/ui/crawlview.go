@@ -94,6 +94,8 @@ type CrawlView struct {
 	summary   *widget.Label
 	counters  map[string]*widget.Button
 	content   fyne.CanvasObject
+
+	onFilterTree func(text string)
 }
 
 type filterState struct {
@@ -119,6 +121,13 @@ func NewCrawlView(run *crawlrun.Run) *CrawlView {
 	go v.redrawLoop()
 
 	return v
+}
+
+// SetMergeFilterTreeHook sets a callback to filter the session tree from merge hints.
+func (v *CrawlView) SetMergeFilterTreeHook(fn func(text string)) {
+	if v != nil {
+		v.onFilterTree = fn
+	}
 }
 
 // Start releases the redraw loop. Call it immediately before ShowAndRun.
@@ -176,7 +185,9 @@ func (v *CrawlView) build() {
 			dialog.ShowInformation("Merge hints", "No duplicate or low-confidence hints for this crawl.", parent)
 			return
 		}
-		ShowCrawlMergeHintsDialog(parent, suggestions)
+		ShowCrawlMergeHintsDialog(parent, suggestions, CrawlMergeHintsOptions{
+			OnFilterTree: v.onFilterTree,
+		})
 	})
 	mergeHints.Importance = widget.LowImportance
 	counterBar.Add(mergeHints)

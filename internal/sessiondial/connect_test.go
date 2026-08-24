@@ -234,6 +234,29 @@ func TestCancelledContextIsHonouredBeforeDialing(t *testing.T) {
 	}
 }
 
+func TestPromptLoginFillsMissingUsername(t *testing.T) {
+	srv := startDevice(t, "lab-r1")
+	n := nodeFor(srv)
+	n.Username = ""
+	n.Password = ""
+
+	var asked bool
+	opts := sessiondial.Options{
+		PromptLogin: func() (string, string, error) {
+			asked = true
+			return "admin", "lab", nil
+		},
+	}
+	tp, err := sessiondial.Connect(context.Background(), n, opts)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer tp.Close()
+	if !asked {
+		t.Fatal("PromptLogin was not called for a session with no username")
+	}
+}
+
 func TestResolveCGNATLeavesOrdinaryTargetsAlone(t *testing.T) {
 	for _, host := range []string{"lab-r1.lab.example", "172.16.1.2", "10.0.0.108", "192.0.2.7"} {
 		if got := sessiondial.ResolveCGNAT(host, nil); got != host {

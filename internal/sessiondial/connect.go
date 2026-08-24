@@ -83,6 +83,12 @@ type Options struct {
 	// AuthPrompt answers password and keyboard-interactive challenges.
 	AuthPrompt sshcore.AuthPromptFunc
 
+	// PromptLogin is called when the session still has no username after
+	// credential lookup. It returns a username and an optional password.
+	// An empty password leaves AuthPrompt to answer the SSH password
+	// challenge. nil means a missing username is a hard error.
+	PromptLogin func() (username, password string, err error)
+
 	// Resolve maps the configured host to what should actually be dialed.
 	// nil means ResolveCGNAT.
 	Resolve func(host string) string
@@ -165,8 +171,19 @@ func Connect(ctx context.Context, n sessions.Node, o Options) (term.Transport, e
 	done := make(chan result, 1)
 
 	go func() {
-		tp, err := dial(ctx, n, o)
-		done <- result{tp, err}
+		var tp term.Transport
+		var err error
+		defer func() {
+			if r := recover(); r != nil {
+				if tp != nil {
+					_ = tp.Close()
+					tp = nil
+				}
+				err = fmt.Errorf("internal dial panic: %v", r)
+			}
+			done <- result{tp, err}
+		}()
+		tp, err = dial(ctx, n, o)
 	}()
 
 	select {
@@ -279,6 +296,26 @@ func connectSSH(ctx context.Context, n sessions.Node, o Options) (term.Transport
 	applyCredential(&cfg, n, cred)
 
 	if strings.TrimSpace(cfg.Username) == "" {
+		user, pass := "", ""
+		var perr error
+		switch {
+		case o.PromptLogin != nil:
+			user, pass, perr = o.PromptLogin()
+		case o.AuthPrompt != nil:
+			user, perr = o.AuthPrompt("Username:", true)
+		default:
+			return nil, fmt.Errorf("no username: the session names none, and no credential supplied one")
+		}
+		if perr != nil {
+			return nil, perr
+		}
+		cfg.Username = strings.TrimSpace(user)
+		if p := strings.TrimSpace(pass); p != "" && strings.TrimSpace(cfg.Password) == "" {
+			cfg.Password = p
+			cfg.UseAgent = false
+		}
+	}
+	if strings.TrimSpace(cfg.Username) == "" {
 		return nil, fmt.Errorf("no username: the session names none, and no credential supplied one")
 	}
 
@@ -354,8 +391,13 @@ func applyCredential(cfg *sshcore.Config, n sessions.Node, cred Credential) {
 		// No material of our own: the agent answers, and failing that the
 		// AuthPrompt does. This is what an unconfigured node uses, and it
 		// is why a node with nothing filled in still connects on a machine
-		// with a loaded agent.
+		// with a loaded agent. A password typed into manual auth still
+		// has to travel: ignoring it is how the form looked like it
+		// accepted a password and then never sent one.
 		cfg.UseAgent = true
+		if p := firstNonEmpty(cred.Password, n.Password); p != "" {
+			cfg.Password = p
+		}
 	}
 }
 

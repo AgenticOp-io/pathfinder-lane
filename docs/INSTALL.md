@@ -57,6 +57,7 @@ No Azure/Google registration or security admin on engineer PCs.
 | Binary | Role |
 | --- | --- |
 | `pathfinder.exe` | Main app |
+| `pathfinder-msp.exe` | Cursor IDE bridge for PathfinderSSH MSP (stdio → localhost) |
 | `pfseed.exe` | Headless sync / seeds |
 | `pfinstall.exe` | Standalone installer |
 | `pfsetup-msp.exe` | **MSP setup** (the one admin wizard) |
@@ -67,14 +68,18 @@ No Azure/Google registration or security admin on engineer PCs.
 ## Build
 
 ```powershell
-.\build-windows.ps1 -Targets installers
+.\build-windows.ps1 -Targets installers -Install
 ```
+
+This builds `pathfinder.exe`, `pathfinder-msp.exe`, and the setup tools into `dist\windows\`, then runs `pfinstall.exe -install`.
 
 ## User data
 
 | Path | Contents |
 | --- | --- |
 | `%LOCALAPPDATA%\PathfinderSSH-MSP\` | Install root, enrollment, branding, security policy |
-| `%USERPROFILE%\.pathfinderssh\` | sessions, vault, maps, `settings.json` |
+| `%USERPROFILE%\.pathfinderssh\` | sessions, vault, maps, `settings.json`, `msp-bridge.json` (while app running) |
+
+See also [CURSOR-MSP.md](./CURSOR-MSP.md) for Cursor IDE integration.
 
 Auth detail: [AUTH.md](AUTH.md).

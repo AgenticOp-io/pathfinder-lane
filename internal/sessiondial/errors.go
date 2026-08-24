@@ -63,13 +63,21 @@ func (e *explainedError) Error() string {
 		return e.hint
 	}
 	// Lead with the hint so dialog boxes are readable; keep the cause for logs.
-	return e.hint + "\n\n(" + e.cause.Error() + ")"
+	return e.hint + "\n\n(" + clipCause(e.cause.Error(), 280) + ")"
 }
 
 func (e *explainedError) Unwrap() error { return e.cause }
 
 func explain(cause error, hint string) error {
 	return &explainedError{cause: cause, hint: hint}
+}
+
+func clipCause(s string, max int) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func isBareEOF(msg string) bool {

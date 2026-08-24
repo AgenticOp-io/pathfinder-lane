@@ -38,7 +38,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -112,8 +111,14 @@ type SettingsForm struct {
 	chgStart  *widget.Entry
 	chgEnd    *widget.Entry
 	vaultBG   *widget.Check
-	cursorKey *widget.Entry
-	tsAddon   *widget.Check
+	cursorKey  *widget.Entry
+	cursorRepo *widget.Entry
+	cursorRef  *widget.Entry
+	tsAddon    *widget.Check
+
+	mspBridgeOn   *widget.Check
+	mspAllowSend  *widget.Check
+	mspBridgePort *widget.Entry
 
 	mspPanel *MSPIntegrationPanel
 
@@ -166,7 +171,16 @@ func (f *SettingsForm) SetSettings(s Settings) {
 	f.chgEnd.SetText(v.ChangeWindowEnd)
 	f.vaultBG.SetChecked(v.VaultBreakGlass)
 	f.cursorKey.SetText(v.CursorAPIKey)
+	f.cursorRepo.SetText(v.CursorRepo)
+	f.cursorRef.SetText(v.CursorRepoRef)
 	f.tsAddon.SetChecked(v.TroubleshootAddon)
+	f.mspBridgeOn.SetChecked(!v.MSPBridgeDisabled)
+	f.mspAllowSend.SetChecked(v.MSPBridgeAllowSend)
+	port := strings.TrimSpace(v.MSPBridgePort)
+	if port == "" || port == "0" {
+		port = "19790"
+	}
+	f.mspBridgePort.SetText(port)
 
 	if f.mspPanel != nil {
 		f.mspPanel.load(v)
@@ -212,7 +226,14 @@ func (f *SettingsForm) read() SettingsFields {
 		ChangeWindowEnd:   f.chgEnd.Text,
 		VaultBreakGlass:   f.vaultBG.Checked,
 		CursorAPIKey:      f.cursorKey.Text,
-		TroubleshootAddon: f.tsAddon.Checked,
+		CursorRepo:        f.cursorRepo.Text,
+		CursorRepoRef:     f.cursorRef.Text,
+		TroubleshootAddon:  f.tsAddon.Checked,
+		SessionTreePinned:  f.opts.Settings.SessionTreePinned,
+		MSPBridgeDisabled:  !f.mspBridgeOn.Checked,
+		MSPBridgePort:      f.mspBridgePort.Text,
+		MSPBridgeToken:     f.opts.Settings.MSPBridgeToken,
+		MSPBridgeAllowSend: f.mspAllowSend.Checked,
 	}
 	if f.mspPanel != nil {
 		return f.mspPanel.fields(base)
@@ -266,7 +287,12 @@ func (f *SettingsForm) build() {
 	f.vaultBG = widget.NewCheck("Vault break-glass (ignore customer scope on ops desk)", nil)
 	f.cursorKey = entry("crsr_… or leave blank to use CURSOR_API_KEY")
 	f.cursorKey.Password = true
-	f.tsAddon = widget.NewCheck("Enable Troubleshoot addon (Ops → Troubleshoot agent)", nil)
+	f.cursorRepo = entry("https://github.com/org/repo")
+	f.cursorRef = entry("main")
+	f.tsAddon = widget.NewCheck("Enable Troubleshoot addon (Cursor side pane + Scripts agent)", nil)
+	f.mspBridgeOn = widget.NewCheck("Enable Cursor IDE bridge for PathfinderSSH MSP (localhost)", nil)
+	f.mspAllowSend = widget.NewCheck("Allow Cursor to type into live SSH tabs", nil)
+	f.mspBridgePort = entry("19790")
 
 	if f.opts.MSPIntegrationsEnabled {
 		f.mspPanel = newMSPIntegrationPanel()
@@ -387,11 +413,22 @@ func (f *SettingsForm) opsTab() fyne.CanvasObject {
 		),
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Troubleshoot addon", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Enable the Troubleshoot agent (gather scrollback, run scripts, ask Cursor)."),
+		widget.NewLabel("Shows a Cursor AI pane on the right. Ask sends session scrollback to Cloud Agents.\n"+
+			"Full Troubleshoot agent remains under Scripts."),
 		form(row("Enable addon", f.tsAddon)),
 		form(row("Cursor API key", f.cursorKey)),
-		widget.NewLabel("Prefer CURSOR_API_KEY in the environment. This field is an optional\n"+
-			"local override. Create a key at cursor.com/dashboard → API Keys."),
+		form(row("Default GitHub repo", f.cursorRepo)),
+		form(row("Repo ref", f.cursorRef)),
+		widget.NewLabel("Prefer CURSOR_API_KEY in the environment. Create a key at cursor.com/dashboard → Cloud Agents.\n"+
+			"Cloud Agents need a linked GitHub repo (listed under your Cursor account)."),
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle("Cursor IDE bridge (MSP)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("Lets Cursor Agent tools list sessions, read scrollback, and optionally send commands\n"+
+			"to this running PathfinderSSH MSP window (not Cloud Agents). See docs/CURSOR-MSP.md."),
+		form(row("Enable bridge", f.mspBridgeOn)),
+		form(row("Allow send", f.mspAllowSend)),
+		form(row("Listen port", f.mspBridgePort)),
+		widget.NewLabel("Bind is always 127.0.0.1. Token is written to ~/.pathfinderssh/msp-bridge.json."),
 		widget.NewSeparator(),
 		widget.NewLabel("Auvik, PSA, RMM, and documentation vault keys are on the Integrations tab."),
 	))
@@ -563,28 +600,32 @@ func applicationFontSizeChoices() []string {
 	return out
 }
 
-// ShowSettings opens the settings dialog over w. save is called with the
-// accepted settings; the dialog closes only when the form was readable, so a
-// refused value keeps the person in front of the field that caused it.
-func ShowSettings(w fyne.Window, opts SettingsFormOptions) {
-	var d dialog.Dialog
-
+// ShowSettings opens Settings as a window of the app, not a canvas overlay
+// that greys out the main window. save is called with the accepted settings;
+// the window stays open when a value is refused so the field can be fixed.
+func ShowSettings(a fyne.App, opts SettingsFormOptions) fyne.Window {
+	if a == nil {
+		a = fyne.CurrentApp()
+	}
+	w := a.NewWindow("Settings")
 	inner := opts
 	inner.OnCancel = func() {
 		if opts.OnCancel != nil {
 			opts.OnCancel()
 		}
-		d.Hide()
+		w.Close()
 	}
 	if opts.OnSave != nil {
 		inner.OnSave = func(s Settings) {
-			d.Hide()
 			opts.OnSave(s)
+			w.Close()
 		}
 	}
-
 	form := NewSettingsForm(inner)
-	d = dialog.NewCustomWithoutButtons("Settings", form.Content(), w)
-	d.Resize(fyne.NewSize(720, 620))
-	d.Show()
+	w.SetContent(container.NewPadded(form.Content()))
+	w.Resize(fyne.NewSize(720, 620))
+	w.CenterOnScreen()
+	w.Show()
+	w.RequestFocus()
+	return w
 }

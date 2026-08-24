@@ -141,7 +141,17 @@ func Dial(cfg Config) (*Client, error) {
 
 	// Bound the handshake, then clear the deadline for the session.
 	conn.SetDeadline(time.Now().Add(c.Timeout))
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientConfig)
+	var sshConn ssh.Conn
+	var chans <-chan ssh.NewChannel
+	var reqs <-chan *ssh.Request
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("SSH handshake panicked (peer sent unexpected data): %v", r)
+			}
+		}()
+		sshConn, chans, reqs, err = ssh.NewClientConn(conn, addr, clientConfig)
+	}()
 	if err != nil {
 		conn.Close()
 		closeBastions(bastions)

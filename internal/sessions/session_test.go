@@ -112,14 +112,14 @@ func TestValidateReportsEveryProblemAtOnce(t *testing.T) {
 	n.AuthType = "magic-beans"
 
 	errs := n.Validate()
-	if len(errs) < 3 {
-		t.Fatalf("want at least 3 field errors, got %d: %v", len(errs), errs)
+	if len(errs) < 2 {
+		t.Fatalf("want at least 2 field errors, got %d: %v", len(errs), errs)
 	}
 	seen := map[string]bool{}
 	for _, e := range errs {
 		seen[e.Field] = true
 	}
-	for _, want := range []string{"host", "username", "auth_type"} {
+	for _, want := range []string{"host", "auth_type"} {
 		if !seen[want] {
 			t.Errorf("no error reported for %q; got %v", want, errs)
 		}

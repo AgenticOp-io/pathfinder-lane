@@ -120,17 +120,22 @@ func (h *host) exportCustomerHandoff() {
 
 func (h *host) openNOCMapView() {
 	customer := strings.TrimSpace(h.opsDeskCustomer())
+	openFor := func(c string, pollSec int) {
+		h.openLatestCustomerMap(c, pollSec)
+	}
 	if customer == "" {
 		picker := ui.NewCustomerFolderPicker(h.mspCustomerNames(), "")
+		auto := widget.NewCheck("Auto-refresh every 60 seconds (wallboard)", nil)
+		auto.SetChecked(true)
 		body := container.NewVBox(
-			widget.NewLabel("Open the latest topology map for NOC / wallboard viewing.\n"+
-				"Use Reload in the map viewer (or F5) to refresh after crawls."),
+			widget.NewLabel("Open the latest topology map for NOC / wallboard viewing."),
 			widget.NewLabel("Customer:"),
 		)
 		if len(h.mspCustomerNames()) > 0 {
 			body.Add(picker.Select)
 		}
 		body.Add(picker.New)
+		body.Add(auto)
 		dialog.ShowCustomConfirm("NOC map view", "Open map", "Cancel", body, func(ok bool) {
 			if !ok {
 				return
@@ -140,14 +145,18 @@ func (h *host) openNOCMapView() {
 				dialog.ShowInformation("NOC map", "Choose a customer.", h.win)
 				return
 			}
-			h.openLatestCustomerMap(c)
+			poll := 0
+			if auto.Checked {
+				poll = 60
+			}
+			openFor(c, poll)
 		}, h.win)
 		return
 	}
-	h.openLatestCustomerMap(customer)
+	openFor(customer, 60)
 }
 
-func (h *host) openLatestCustomerMap(customer string) {
+func (h *host) openLatestCustomerMap(customer string, pollSec int) {
 	dir := ui.CustomerMapsDir(ui.GetAppHome(), customer)
 	path, err := latestJSONInDir(dir)
 	if err != nil {
@@ -161,10 +170,11 @@ func (h *host) openLatestCustomerMap(customer string) {
 	}
 	h.mapDir = dir
 	h.mapCustomer = customer
-	h.openMap(mapweb.MapFile{Name: filepath.Base(path), Path: path})
-	dialog.ShowInformation("NOC map",
-		"Map opened in your browser. Use Reload in the viewer to refresh.\n"+
-			"Fullscreen the browser tab for wallboard mode.", h.win)
+	if pollSec > 0 {
+		h.openMap(mapweb.MapFile{Name: filepath.Base(path), Path: path}, pollSec)
+	} else {
+		h.openMap(mapweb.MapFile{Name: filepath.Base(path), Path: path})
+	}
 }
 
 func latestJSONInDir(dir string) (string, error) {

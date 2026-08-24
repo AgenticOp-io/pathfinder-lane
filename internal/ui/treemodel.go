@@ -5,7 +5,6 @@ package ui
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/scottpeterman/pathfinderssh/internal/sessions"
@@ -109,47 +108,17 @@ func buildFolderLevel(v *TreeView, parentPath string, folders []sessions.Folder,
 		}
 
 		fuid := FolderUID(path)
-		// CountSessions walks the model once per folder; cheap vs GetDisplay
-		// on the terminal, and labels need the full subtree size.
-		total := f.CountSessions()
-		label := f.Name
-		if total > 0 {
-			label = f.Name + " (" + strconv.Itoa(total) + ")"
-		}
-		visible := len(sessionUIDs)
-		for _, cuid := range childFolderUIDs {
-			visible += visibleSessionsUnder(v, cuid)
-		}
 		v.Rows[fuid] = TreeRow{
 			UID:      fuid,
 			IsFolder: true,
 			Folder:   path,
-			Label:    label,
-			Detail:   folderDetail(visible),
+			Label:    f.Name,
+			Detail:   "",
 		}
 		v.Children[fuid] = kids
 		uids = append(uids, fuid)
 	}
 	return uids
-}
-
-func visibleSessionsUnder(v *TreeView, folderUID string) int {
-	n := 0
-	for _, c := range v.Children[folderUID] {
-		if v.Rows[c].IsFolder {
-			n += visibleSessionsUnder(v, c)
-		} else {
-			n++
-		}
-	}
-	return n
-}
-
-func folderDetail(n int) string {
-	if n == 1 {
-		return "1 session"
-	}
-	return strconv.Itoa(n) + " sessions"
 }
 
 // IsBranch answers fyne.Tree's second question. THE ROOT IS ALWAYS A BRANCH.

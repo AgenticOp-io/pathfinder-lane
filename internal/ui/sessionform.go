@@ -176,6 +176,9 @@ type SessionForm struct {
 	buttons []*widget.Button
 	content fyne.CanvasObject
 
+	expandMore    *widget.Button
+	moreTabsAdded bool
+
 	// The palette selector shows display labels; the node stores registry
 	// keys. Both directions are needed, so both maps are kept.
 	labelToThemeKey map[string]string
@@ -283,6 +286,9 @@ func (f *SessionForm) SetNode(n sessions.Node) {
 	f.opts.Node = n
 	f.applyTransport()
 	f.status.SetText("")
+	if f.nodeNeedsMoreTabs(n) {
+		f.appendMoreTabs()
+	}
 }
 
 // SetStatus writes the line under the form. Used by the host for dial
@@ -366,13 +372,44 @@ func (f *SessionForm) build() {
 	f.status = widget.NewLabel("")
 	f.status.Wrapping = fyne.TextWrapWord
 
+	f.expandMore = widget.NewButton("Show terminal & advanced options…", func() {
+		f.appendMoreTabs()
+	})
 	f.tabs = container.NewAppTabs(
 		container.NewTabItem("Connection", f.connectionTab()),
-		container.NewTabItem("Terminal", f.terminalTab()),
-		container.NewTabItem("Advanced", f.advancedTab()),
 	)
 
 	f.content = container.NewBorder(nil, f.footer(), nil, nil, f.tabs)
+}
+
+func (f *SessionForm) appendMoreTabs() {
+	if f == nil || f.moreTabsAdded {
+		return
+	}
+	f.moreTabsAdded = true
+	f.tabs.Append(container.NewTabItem("Terminal", f.terminalTab()))
+	f.tabs.Append(container.NewTabItem("Advanced", f.advancedTab()))
+	if f.expandMore != nil {
+		f.expandMore.Hide()
+	}
+}
+
+func (f *SessionForm) nodeNeedsMoreTabs(n sessions.Node) bool {
+	n = n.Normalize()
+	if n.TerminalTheme != "" || n.FontSize > 0 || n.ScrollbackLines > 0 ||
+		n.TermType != "" || n.PasteLineDelayMs != 0 || n.PasteWarnLines > 0 ||
+		n.ConsoleBaud > 0 || n.LogEnabled || n.AntiIdle.Mode != sessions.AntiIdleInherit ||
+		n.AntiIdle.IntervalSec > 0 {
+		return true
+	}
+	if n.HostKeyPolicy != "" || n.KnownHostsPath != "" || n.LegacyAlgorithms ||
+		n.ConnectTimeoutSec > 0 || n.Jump.Host != "" || n.ConsoleFallback != "" {
+		return true
+	}
+	if n.Vendor != "" || n.Model != "" || n.DeviceType != "" || n.Notes != "" {
+		return true
+	}
+	return false
 }
 
 func (f *SessionForm) connectionTab() fyne.CanvasObject {
@@ -459,6 +496,8 @@ func (f *SessionForm) connectionTab() fyne.CanvasObject {
 		f.sshGroup,
 		f.telnetGroup,
 		f.serialGroup,
+		widget.NewSeparator(),
+		f.expandMore,
 	))
 }
 
@@ -575,6 +614,12 @@ func (f *SessionForm) read() sessions.Node {
 	n.Credential = f.credRef(f.credential.Selected)
 	n.AuthType = f.authType.Selected
 	n.Password = f.password.Text
+	// A typed password with "agent" selected is still password auth. Leaving
+	// the selector on agent grayed the password box and then ignored what
+	// was typed, so "manual auth" never reached the device.
+	if n.Credential == "" && strings.TrimSpace(n.Password) != "" && n.AuthType == sessions.AuthAgent {
+		n.AuthType = sessions.AuthPassword
+	}
 	n.KeyPath = f.keyPath.Text
 	n.KeyPassphrase = f.keyPass.Text
 
@@ -668,12 +713,18 @@ func (f *SessionForm) applyCredentialState() {
 	// states auth of its own, so typing a username here is exactly how a
 	// session opts back out to manual auth.
 	usingVault := f.credRef(f.credential.Selected) != ""
+	manual := !usingVault
+	useKey := f.authType.Selected == sessions.AuthPublicKey
 
-	setEnabled(f.password, !usingVault && f.authType.Selected == sessions.AuthPassword)
-	setEnabled(f.keyPath, !usingVault && f.authType.Selected == sessions.AuthPublicKey)
-	setEnabled(f.keyPass, !usingVault && f.authType.Selected == sessions.AuthPublicKey)
-	setEnabled(f.authType, !usingVault)
-	setEnabled(f.username, !usingVault)
+	// Manual auth must keep username and password typeable. Auth type
+	// "agent" is the import default and used to gray the password box,
+	// which made "(none — manual auth)" look like a prompt you could not
+	// type into.
+	setEnabled(f.username, manual)
+	setEnabled(f.authType, manual)
+	setEnabled(f.password, manual && !useKey)
+	setEnabled(f.keyPath, manual && useKey)
+	setEnabled(f.keyPass, manual && useKey)
 }
 
 // showErrors puts every field error on the status line and jumps to the tab

@@ -12,6 +12,8 @@
 // the smoke harness runs in.
 package ui
 
+import "strings"
+
 // AppVariant is the application chrome's appearance. There are two values and
 // deliberately no "system": following the OS means the chrome can flip at
 // sunset underneath a terminal palette the user chose and did not change, which
@@ -142,9 +144,25 @@ type Settings struct {
 	// CursorAPIKey is optional; CURSOR_API_KEY env wins when this is empty.
 	// Prefer env in CI; the settings field is for interactive MSP boxes.
 	CursorAPIKey string `json:"cursor_api_key,omitempty"`
+	// CursorRepo is the default GitHub URL for Cloud Agents (Ask / Troubleshoot).
+	CursorRepo string `json:"cursor_repo,omitempty"`
+	// CursorRepoRef is the starting git ref for CursorRepo (default main).
+	CursorRepoRef string `json:"cursor_repo_ref,omitempty"`
 
 	// TroubleshootAddon enables Ops → Troubleshoot agent (gather, scripts, Cursor).
 	TroubleshootAddon bool `json:"troubleshoot_addon,omitempty"`
+	// SessionTreePinned keeps the left sessions drawer open (else hover/rail).
+	SessionTreePinned bool `json:"session_tree_pinned,omitempty"`
+
+	// MSPBridgeDisabled turns off the localhost Cursor IDE bridge for
+	// PathfinderSSH MSP (pathfinder-msp). When unset/false, the bridge listens on 127.0.0.1.
+	MSPBridgeDisabled bool `json:"msp_bridge_disabled,omitempty"`
+	// MSPBridgePort is the listen port (default 19790). Bind is always 127.0.0.1.
+	MSPBridgePort int `json:"msp_bridge_port,omitempty"`
+	// MSPBridgeToken authenticates Cursor bridge calls; auto-generated when empty.
+	MSPBridgeToken string `json:"msp_bridge_token,omitempty"`
+	// MSPBridgeAllowSend lets Cursor type into live SSH tabs (off by default).
+	MSPBridgeAllowSend bool `json:"msp_bridge_allow_send,omitempty"`
 
 	// Auvik inventory API. Env AUVIK_* overrides when set.
 	AuvikUsername string `json:"auvik_username,omitempty"`
@@ -298,11 +316,17 @@ func (s Settings) Normalized() Settings {
 		s.AntiIdleKeystroke = antiIdleDefaultKeystroke
 	}
 	s.TreeExpandStyle = s.TreeExpandStyle.Normalize()
+	if strings.TrimSpace(s.CursorRepoRef) == "" && strings.TrimSpace(s.CursorRepo) != "" {
+		s.CursorRepoRef = "main"
+	}
 	if s.AuvikSyncEnabled && s.AuvikSyncIntervalMin <= 0 {
 		s.AuvikSyncIntervalMin = 60
 	}
 	if s.AuvikSyncIntervalMin < 0 {
 		s.AuvikSyncIntervalMin = 0
+	}
+	if s.MSPBridgePort < 0 {
+		s.MSPBridgePort = 0
 	}
 	return s
 }

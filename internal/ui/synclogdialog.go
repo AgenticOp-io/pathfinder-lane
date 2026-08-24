@@ -99,6 +99,11 @@ func ShowSyncResultDialog(w fyne.Window, title, summary string, errCount int) {
 	d.Show()
 }
 
+// RevealInFileManager opens a folder in the system file manager.
+func RevealInFileManager(dir string) error {
+	return revealInFileManager(dir)
+}
+
 func revealInFileManager(dir string) error {
 	switch runtime.GOOS {
 	case "windows":

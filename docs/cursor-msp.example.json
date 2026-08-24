@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "pathfinder-msp": {
+      "command": "C:\\Users\\REPLACE\\AppData\\Local\\PathfinderSSH-MSP\\bin\\pathfinder-msp.exe"
+    }
+  }
+}

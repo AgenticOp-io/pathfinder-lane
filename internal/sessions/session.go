@@ -555,9 +555,8 @@ func (n Node) ValidateFor(credentialDefault bool) []FieldError {
 		default:
 			add("auth_type", fmt.Sprintf("unknown auth type %q", n.AuthType))
 		}
-		if n.Username == "" && !authMayComeFromTheStore {
-			add("username", "required unless a vault credential supplies one")
-		}
+		// Username may be empty: the GUI asks at connect time (manual
+		// auth prompt). A vault credential can still supply one.
 		switch n.HostKeyPolicy {
 		case HostKeyStrict, HostKeyTOFU, HostKeyInsecure:
 		default:

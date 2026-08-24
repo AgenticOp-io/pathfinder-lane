@@ -23,6 +23,9 @@ func ApplyInstallerTheme(a fyne.App) {
 }
 
 func (t *installerTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	if c, ok := chromeLightContrast(name); ok {
+		return c
+	}
 	switch name {
 	case theme.ColorNamePrimary:
 		return color.NRGBA{R: 0, G: 103, B: 192, A: 255} // Windows accent #0067C0
@@ -60,6 +63,8 @@ func (t *installerTheme) Size(name fyne.ThemeSizeName) float32 {
 		return 22
 	case theme.SizeNameSubHeadingText:
 		return 17
+	case theme.SizeNameInputBorder:
+		return 2
 	}
 	return t.base.Size(name)
 }

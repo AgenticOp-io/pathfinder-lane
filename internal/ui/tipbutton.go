@@ -4,19 +4,20 @@ package ui
 import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
-	fynetooltip "github.com/dweymouth/fyne-tooltip"
 	ttwidget "github.com/dweymouth/fyne-tooltip/widget"
 )
 
 // TipButton is an icon/text button that can show a mouseover tip.
 type TipButton = ttwidget.Button
 
-// WithTooltips wraps window content so hover tips from TipIconButton render.
+// WithTooltips used to wrap the window in fyne-tooltip's overlay layer.
+// That layer plus any Fyne dialog (session form, Connecting, errors) was
+// aborting Pathfinder on Windows ARM64 with no Go panic — Auvik sessions
+// never even reached connect(). Tips still set on buttons are ignored until
+// a safer hover path exists.
 func WithTooltips(content fyne.CanvasObject, c fyne.Canvas) fyne.CanvasObject {
-	if content == nil || c == nil {
-		return content
-	}
-	return fynetooltip.AddWindowToolTipLayer(content, c)
+	_ = c
+	return content
 }
 
 // TipIconButton is an icon-only button that shows tip on mouseover.

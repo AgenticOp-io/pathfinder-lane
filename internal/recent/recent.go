@@ -72,3 +72,15 @@ func Touch(path, folder, name, host string) ([]Entry, error) {
 	}
 	return next, nil
 }
+
+// Clear removes the recent-session file.
+func Clear(path string) error {
+	if path == "" {
+		return nil
+	}
+	err := os.Remove(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}

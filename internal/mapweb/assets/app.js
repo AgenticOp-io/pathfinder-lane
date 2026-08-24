@@ -40,15 +40,19 @@
   function takeToken() {
     var params = new URLSearchParams(window.location.search);
     var fromURL = params.get('t') || '';
+    var pollSec = parseInt(params.get('poll') || '0', 10);
 
     if (fromURL) {
       TOKEN = fromURL;
       try { sessionStorage.setItem(TOKEN_KEY, fromURL); } catch (e) { /* private mode */ }
       history.replaceState(null, '', window.location.pathname);
-      return;
+    } else {
+      try { TOKEN = sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { TOKEN = ''; }
     }
 
-    try { TOKEN = sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { TOKEN = ''; }
+    if (pollSec > 0) {
+      setInterval(function () { window.location.reload(); }, pollSec * 1000);
+    }
   }
 
   // A token that no longer works is worth discarding: the application has

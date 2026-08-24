@@ -160,8 +160,21 @@ func (i *Instance) Applet() Applet { return i.mount.Applet }
 // Instances lists every open tab/window. UI goroutine only.
 func (s *Shell) Instances() []*Instance { return s.instances() }
 
+// ID is the registry id for this tab/window.
+func (i *Instance) ID() int {
+	if i == nil || i.info == nil {
+		return 0
+	}
+	return i.info.ID
+}
+
 // Title is the unique display title.
-func (i *Instance) Title() string { return i.info.Title }
+func (i *Instance) Title() string {
+	if i == nil || i.info == nil {
+		return ""
+	}
+	return i.info.Title
+}
 
 // SetStatus writes the instance's status line. Safe only on the UI goroutine.
 func (i *Instance) SetStatus(msg string) { i.status.SetText(msg) }
@@ -224,6 +237,10 @@ type Shell struct {
 	// lastTerminal is the most recently selected SSH tab; used when DocTabs has
 	// no selection (tiled layout) or a non-terminal tab is selected.
 	lastTerminal *Instance
+
+	// OnActiveTerminalChange fires when the SSH tab that should receive
+	// Cursor / macro traffic changes (tab select, open, tile activate).
+	OnActiveTerminalChange func()
 
 	// customerHeaders maps marker DocTabs items → customer name. DocTabs has
 	// no section API; these tabs are headers above each customer group.
@@ -402,12 +419,6 @@ func (s *Shell) tile() {
 	s.tileRoots = map[int]fyne.CanvasObject{}
 	s.tileCells = map[int]*tileCell{}
 	cells := make([]fyne.CanvasObject, 0, len(terms))
-	var side fyne.CanvasObject
-	off := 0.25
-	if s.split != nil {
-		side = s.split.Leading
-		off = s.split.Offset
-	}
 	for _, inst := range terms {
 		if inst.tab != nil {
 			s.releaseTab(inst.tab)
@@ -422,15 +433,7 @@ func (s *Shell) tile() {
 		s.lastTerminal = terms[0]
 	}
 	s.tileGrid = buildTileGrid(cells)
-	if side != nil {
-		s.split = container.NewHSplit(side, s.tileGrid)
-		s.split.SetOffset(off)
-		s.body = s.split
-	} else {
-		s.split = nil
-		s.body = s.tileGrid
-	}
-	s.applyBody()
+	s.rebuildBody()
 	s.refreshTileFocus()
 	s.refreshSummary()
 }
@@ -440,12 +443,6 @@ func (s *Shell) untile() {
 		return
 	}
 	s.tiled = false
-	var side fyne.CanvasObject
-	off := 0.25
-	if s.split != nil {
-		side = s.split.Leading
-		off = s.split.Offset
-	}
 	for _, inst := range s.instances() {
 		if inst == nil || inst.win != nil {
 			continue
@@ -459,15 +456,7 @@ func (s *Shell) untile() {
 	s.tileRoots = map[int]fyne.CanvasObject{}
 	s.tileCells = map[int]*tileCell{}
 	s.tileGrid = nil
-	if side != nil {
-		s.split = container.NewHSplit(side, s.tabs)
-		s.split.SetOffset(off)
-		s.body = s.split
-	} else {
-		s.split = nil
-		s.body = s.tabs
-	}
-	s.applyBody()
+	s.rebuildBody()
 	s.regroupCustomerTabs()
 	s.refreshSummary()
 }
@@ -525,6 +514,9 @@ func (s *Shell) activateTile(inst *Instance) {
 	s.lastTerminal = inst
 	s.refreshTileFocus()
 	inst.activateFocus()
+	if s.OnActiveTerminalChange != nil {
+		s.OnActiveTerminalChange()
+	}
 }
 
 func (s *Shell) refreshTileFocus() {
@@ -584,27 +576,26 @@ func (s *Shell) cycleTile(delta int) {
 // SetSide docks an object down the left of the window, beside the tabs.
 //
 // The shell does not know or care what it is — an inventory tree today, a
-// filter panel later. offset is the fraction of the width the side takes;
-// values outside a usable range are clamped rather than honoured, because a
-// split at 0.02 is a pane nobody can grab back.
+// filter panel later. offset is the fraction of the width the side takes
+// (typically ~0.20 for the session tree).
 //
 // Calling it a second time replaces the side. Passing nil removes it and
-// returns the tabs to full width, which is what a "hide the tree" toggle needs.
+// returns the tabs to full width.
 func (s *Shell) SetSide(obj fyne.CanvasObject, offset float64) {
 	s.leftPanel = obj
 	if offset > 0 {
-		if offset < 0.1 {
-			offset = 0.1
+		if offset < 0.12 {
+			offset = 0.12
 		}
-		if offset > 0.6 {
-			offset = 0.6
+		if offset > 0.45 {
+			offset = 0.45
 		}
 		s.leftOffset = offset
 	}
 	s.rebuildBody()
 }
 
-// SetRight docks an object to the right of the tab strip (e.g. Cursor AI pane).
+// SetRight docks an object to the right of the tab strip (legacy; prefer a popup).
 func (s *Shell) SetRight(obj fyne.CanvasObject, offset float64) {
 	s.rightPanel = obj
 	if offset > 0 {
@@ -619,6 +610,11 @@ func (s *Shell) SetRight(obj fyne.CanvasObject, offset float64) {
 	s.rebuildBody()
 }
 
+// HasRight reports whether a right pane is currently docked.
+func (s *Shell) HasRight() bool {
+	return s != nil && s.rightPanel != nil
+}
+
 // RightOffset is the splitter position for the right pane, or 0 when hidden.
 func (s *Shell) RightOffset() float64 {
 	if s.rightSplit == nil {
@@ -629,6 +625,9 @@ func (s *Shell) RightOffset() float64 {
 
 func (s *Shell) rebuildBody() {
 	center := fyne.CanvasObject(s.tabs)
+	if s.tiled && s.tileGrid != nil {
+		center = s.tileGrid
+	}
 	if s.rightPanel != nil {
 		off := s.rightOffset
 		if off <= 0 || off >= 1 {
@@ -643,7 +642,7 @@ func (s *Shell) rebuildBody() {
 	if s.leftPanel != nil {
 		off := s.leftOffset
 		if off <= 0 || off >= 1 {
-			off = 0.25
+			off = 0.20
 		}
 		s.split = container.NewHSplit(s.leftPanel, center)
 		s.split.SetOffset(off)
@@ -679,7 +678,8 @@ func (s *Shell) Window() fyne.Window { return s.win }
 // "quit with sessions open?" prompt. Safe from any goroutine.
 func (s *Shell) Registry() *Registry { return s.reg }
 
-// SummaryLabel is the status line (open tabs); host docks it in the bottom chrome.
+// SummaryLabel is retained for hosts that want an open-tab count elsewhere.
+// It is no longer docked in the bottom chrome (tabs already show what is open).
 func (s *Shell) SummaryLabel() *widget.Label { return s.summary }
 // SetTopChrome installs the slim toolbar (Connect, Crawl, …, Menu).
 func (s *Shell) SetTopChrome(obj fyne.CanvasObject) {
@@ -744,6 +744,9 @@ func (s *Shell) Open(m Mount) *Instance {
 	s.tabs.Select(inst.tab)
 	if m.Kind == KindTerminal {
 		s.lastTerminal = inst
+		if s.OnActiveTerminalChange != nil {
+			s.OnActiveTerminalChange()
+		}
 	}
 	s.refreshSummary()
 	inst.settle()
@@ -1309,6 +1312,9 @@ func (s *Shell) focusTab(t *container.TabItem) {
 	if inst := s.instanceFor(t); inst != nil {
 		if inst.mount.Kind == KindTerminal {
 			s.lastTerminal = inst
+			if s.OnActiveTerminalChange != nil {
+				s.OnActiveTerminalChange()
+			}
 		}
 		// Already mounted: focus only. settle()'s size poll + OnPlaced/ResyncSize
 		// made every SSH tab switch feel lagged.

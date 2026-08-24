@@ -7,13 +7,19 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/scottpeterman/pathfinderssh/internal/crawlrun"
 )
 
+// CrawlMergeHintsOptions configures the merge-hints dialog.
+type CrawlMergeHintsOptions struct {
+	OnFilterTree func(text string)
+}
+
 // ShowCrawlMergeHintsDialog lists crawl duplicate / low-confidence merge suggestions.
-func ShowCrawlMergeHintsDialog(w fyne.Window, suggestions []crawlrun.MergeSuggestion) {
+func ShowCrawlMergeHintsDialog(w fyne.Window, suggestions []crawlrun.MergeSuggestion, opts CrawlMergeHintsOptions) {
 	if w == nil || len(suggestions) == 0 {
 		return
 	}
@@ -28,12 +34,47 @@ func ShowCrawlMergeHintsDialog(w fyne.Window, suggestions []crawlrun.MergeSugges
 			o.(*widget.Label).SetText(fmt.Sprintf("%s ↔ %s (%s)", s.NameA, s.NameB, s.Reason))
 		},
 	)
+	selected := -1
+	lines.OnSelected = func(i widget.ListItemID) { selected = int(i) }
+
 	body := container.NewVBox(
 		widget.NewLabel("Review duplicate IPs and low-confidence rows.\n"+
-			"Merge sessions manually in the session tree or re-crawl after fixing inventory."),
+			"Filter the session tree to locate a row, then merge or delete duplicates manually."),
 		container.NewScroll(lines),
 	)
-	dialog.ShowCustom("Crawl merge hints", "Close", body, w)
+	copyBtn := widget.NewButtonWithIcon("Copy all", theme.ContentCopyIcon(), func() {
+		w.Clipboard().SetContent(FormatMergeHints(suggestions))
+	})
+	filterBtn := widget.NewButtonWithIcon("Filter tree to selected", theme.SearchIcon(), func() {
+		if selected < 0 || selected >= len(suggestions) || opts.OnFilterTree == nil {
+			return
+		}
+		opts.OnFilterTree(mergeHintFilterText(suggestions[selected]))
+	})
+	if opts.OnFilterTree == nil {
+		filterBtn.Disable()
+	}
+	buttons := container.NewHBox(copyBtn, filterBtn)
+	content := container.NewBorder(nil, buttons, nil, nil, body)
+	d := dialog.NewCustom("Crawl merge hints", "Close", content, w)
+	d.Resize(fyne.NewSize(640, 420))
+	d.Show()
+}
+
+func mergeHintFilterText(s crawlrun.MergeSuggestion) string {
+	for _, name := range []string{s.NameA, s.NameB} {
+		if i := strings.Index(name, " ("); i > 0 {
+			return strings.TrimSpace(name[:i])
+		}
+	}
+	if i := strings.Index(s.Reason, "IP "); i >= 0 {
+		rest := strings.TrimSpace(s.Reason[i+3:])
+		if j := strings.IndexAny(rest, " ,);"); j > 0 {
+			rest = rest[:j]
+		}
+		return rest
+	}
+	return strings.TrimSpace(s.NameA)
 }
 
 // FormatMergeHints returns a clipboard-friendly summary.

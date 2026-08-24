@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/scottpeterman/pathfinderssh/internal/crashlog"
 	"github.com/scottpeterman/pathfinderssh/internal/sessions"
 )
 
@@ -24,9 +25,10 @@ const (
 	tunnelLogName = "auvik-tunnel.log"
 	// Keep unused tunnels warm so close→reopen does not pay a full Auvik relaunch.
 	tunnelIdleGrace = 2 * time.Minute
-	// After the local port accepts, give Auvik a moment to finish its websocket
-	// handshake before the first real SSH dial (no banner probes — those accept
-	// TCP and abort the half-open tunnel session).
+	// After the local port is bound, give Auvik a moment before the first real
+	// SSH dial. Never Dial/Close the tunnel port to "probe" it — Auvik accepts
+	// that TCP, starts a work websocket, then aborts the session when the probe
+	// closes (TunnelClient: terminating because of termination of TcpAccepted…).
 	tunnelListenSettle = 750 * time.Millisecond
 )
 
@@ -39,6 +41,7 @@ type TunnelManager struct {
 	HostBase string // e.g. us2.my.auvik.com
 	mu       sync.Mutex
 	active   map[string]*tunnelProc
+	keyLocks sync.Map // key → *sync.Mutex, serializes Ensure per mapping
 }
 
 type tunnelProc struct {
@@ -99,9 +102,9 @@ func ResolveTunnelBinary(explicit string) string {
 		home, _ := os.UserHomeDir()
 		local := os.Getenv("LOCALAPPDATA")
 		candidates := []string{
-			// Official install path from `AuvikTunnel -i`
-			filepath.Join(home, "auvik", "Auvik Tunnel", name),
+			// Packaged with PathfinderSSH MSP — prefer this over a separate Auvik UI install.
 			filepath.Join(local, "PathfinderSSH-MSP", "bin", name),
+			filepath.Join(home, "auvik", "Auvik Tunnel", name),
 			filepath.Join(local, "PathfinderSSH", "bin", name),
 			filepath.Join(local, "pathfinderssh", "bin", name),
 			filepath.Join(local, "Programs", "Auvik", name),
@@ -124,11 +127,27 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+func (m *TunnelManager) lockKey(key string) func() {
+	v, _ := m.keyLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 // Ensure starts or reuses a tunnel. ctx bounds wait-for-listen only.
-func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, remotePort, wantLocal int) (int, error) {
+func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, remotePort, wantLocal int) (port int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			crashlog.Write(m.AppHome, "auvik-ensure", r)
+			err = fmt.Errorf("Auvik tunnel panicked: %v", r)
+			port = 0
+			m.log("error", domain, "tunnel panic", fmt.Sprint(r))
+		}
+	}()
 	started := time.Now()
 	domain = strings.TrimSpace(domain)
 	deviceIP = strings.TrimSpace(deviceIP)
+	m.log("info", domain, "ensure begin", fmt.Sprintf("ip=%s port=%d", deviceIP, remotePort))
 	if domain == "" || deviceIP == "" {
 		m.log("error", "", "tunnel needs domain and device IP", fmt.Sprintf("domain=%q ip=%q", domain, deviceIP))
 		return 0, fmt.Errorf("Auvik tunnel needs domain and device IP")
@@ -137,6 +156,8 @@ func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, rem
 		remotePort = 22
 	}
 	key := domain + ":" + deviceIP + ":" + strconv.Itoa(remotePort)
+	unlock := m.lockKey(key)
+	defer unlock()
 
 	m.mu.Lock()
 	var stale *tunnelProc
@@ -164,7 +185,7 @@ func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, rem
 
 	bin := ResolveTunnelBinary(m.BinPath)
 	if bin == "" {
-		msg := "AuvikTunnel not found — run AuvikTunnel -i once, or set Settings → Integrations → AuvikTunnel path"
+		msg := "AuvikTunnel not found — re-run the PathfinderSSH MSP installer, or set Settings → Integrations → AuvikTunnel path"
 		m.log("error", domain, "binary not found", msg)
 		return 0, fmt.Errorf("%s", msg)
 	}
@@ -186,10 +207,17 @@ func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, rem
 	}
 	workDir := filepath.Dir(slotBin)
 
-	// Orphans from a prior Pathfinder process often still accept TCP but do not
-	// forward SSH. Always clear the slot before start — never return a stale
-	// listener as "ready" (that caused handshake timeouts after the speed pass).
+	// Orphans from a prior Pathfinder process may still accept TCP. Adopt a
+	// listener backed by a live AuvikTunnel in this slot instead of relaunching.
 	if portListening(wantLocal) {
+		if pid := slotTunnelPID(workDir); pid > 0 {
+			time.Sleep(tunnelListenSettle)
+			m.mu.Lock()
+			m.active[key] = &tunnelProc{key: key, localPort: wantLocal, pid: pid, workDir: workDir, refs: 1}
+			m.mu.Unlock()
+			m.log("info", domain, fmt.Sprintf("adopted orphan localhost:%d → %s:%d (%s)", wantLocal, deviceIP, remotePort, time.Since(started).Round(time.Millisecond)), "")
+			return wantLocal, nil
+		}
 		m.log("info", domain, fmt.Sprintf("clearing prior listener on localhost:%d", wantLocal), "")
 	}
 	killSlotProcesses(workDir)
@@ -256,7 +284,6 @@ func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, rem
 	}
 	deadline := time.Now().Add(listenWait)
 	var sawExit bool
-	portUpSince := time.Time{}
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			killTunnelOS(pid, cmd)
@@ -264,24 +291,32 @@ func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, rem
 			return 0, ctx.Err()
 		}
 		if portListening(wantLocal) {
-			if portUpSince.IsZero() {
-				portUpSince = time.Now()
+			// Port is bound (checked without connecting). Sleep once — do not
+			// keep probing — then confirm it is still held before SSH dials.
+			if err := sleepCtx(ctx, tunnelListenSettle); err != nil {
+				killTunnelOS(pid, cmd)
+				m.log("error", domain, "cancelled waiting for port", err.Error())
+				return 0, err
 			}
-			if time.Since(portUpSince) >= tunnelListenSettle {
+			if portListening(wantLocal) {
 				m.mu.Lock()
 				m.active[key] = &tunnelProc{key: key, localPort: wantLocal, pid: pid, cmd: cmd, workDir: workDir, exited: exited, refs: 1}
 				m.mu.Unlock()
 				m.log("info", domain, fmt.Sprintf("listening localhost:%d → %s:%d (%s)", wantLocal, deviceIP, remotePort, time.Since(started).Round(time.Millisecond)), "")
 				return wantLocal, nil
 			}
-		} else {
-			portUpSince = time.Time{}
+			// Dropped during settle (supervisor swap); keep waiting.
+			continue
 		}
 		if tunnelWaitUsesProcessExit() && exited.Load() {
 			sawExit = true
 			// Release supervisor sometimes swaps processes; give the replacement
 			// a moment to bind before declaring failure.
-			time.Sleep(500 * time.Millisecond)
+			if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
+				killTunnelOS(pid, cmd)
+				m.log("error", domain, "cancelled waiting for port", err.Error())
+				return 0, err
+			}
 			if portListening(wantLocal) {
 				m.mu.Lock()
 				m.active[key] = &tunnelProc{key: key, localPort: wantLocal, pid: pid, cmd: cmd, workDir: workDir, exited: exited, refs: 1}
@@ -291,10 +326,10 @@ func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, rem
 			}
 			detail := readSiblingTunnelLog(workDir)
 			m.log("error", domain, "AuvikTunnel exited before listen", detail)
-			if detail != "" {
-				return 0, fmt.Errorf("AuvikTunnel exited before opening port %d: %s", wantLocal, detail)
-			}
-			return 0, fmt.Errorf("AuvikTunnel exited before opening port %d (check %s\\TunnelClient.log)", wantLocal, workDir)
+	if detail != "" {
+		return 0, fmt.Errorf("AuvikTunnel exited before opening port %d", wantLocal)
+	}
+	return 0, fmt.Errorf("AuvikTunnel exited before opening port %d (check %s\\TunnelClient.log)", wantLocal, workDir)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -302,7 +337,7 @@ func (m *TunnelManager) Ensure(ctx context.Context, domain, deviceIP string, rem
 	detail := readSiblingTunnelLog(workDir)
 	m.log("error", domain, fmt.Sprintf("port %d not ready within %s (exited=%v)", wantLocal, listenWait, sawExit), detail)
 	if detail != "" {
-		return 0, fmt.Errorf("AuvikTunnel did not open local port %d within %s: %s", wantLocal, listenWait, detail)
+		return 0, fmt.Errorf("AuvikTunnel did not open local port %d within %s", wantLocal, listenWait)
 	}
 	return 0, fmt.Errorf("AuvikTunnel did not open local port %d within %s", wantLocal, listenWait)
 }
@@ -608,18 +643,34 @@ func stableLocalPort(key string) int {
 	return 42000 + n%10000
 }
 
+// portListening reports whether 127.0.0.1:port is taken without Dial+Close
+// (those probes abort Auvik work sessions).
 func portListening(port int) bool {
 	if port <= 0 {
 		return false
 	}
-	// Short timeout: this is polled while waiting for Auvik to bind; a long
-	// DialTimeout dominated connect latency when the port was not up yet.
-	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 80*time.Millisecond)
-	if err != nil {
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err == nil {
+		_ = ln.Close()
 		return false
 	}
-	_ = c.Close()
-	return true
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "address already in use") ||
+		strings.Contains(msg, "only one usage of each socket address")
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 func IsAuvikManaged(n sessions.Node, appHome string) bool {

@@ -1,171 +1,194 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
-// CursorPaneHooks wires the side-panel AI assistant to live SSH sessions.
+// CursorPaneHooks wires the Cursor side pane to live SSH sessions.
 type CursorPaneHooks struct {
-	APIKey string
-	// ActiveContext describes the focused terminal session.
-	ActiveContext func() string
+	APIKey           string
+	ActiveContext    func() string
 	GatherScrollback func(all bool) (string, error)
-	SendToActive     func(command string) error
-	RunScript        func(name string) error
-	ScriptNames      func() []string
-	AskCursor          func(prompt string) (summary string, err error)
+	AskCursor        func(prompt string) (summary string, err error)
 }
 
-// NewCursorPane builds the right-side Cursor troubleshooting panel.
-func NewCursorPane(w fyne.Window, hooks CursorPaneHooks) fyne.CanvasObject {
-	ctx := widget.NewLabel("No active SSH session")
-	ctx.Wrapping = fyne.TextWrapWord
+// CursorAskPane is the right-side Cursor AI panel bound to the active SSH tab.
+type CursorAskPane struct {
+	hooks    CursorPaneHooks
+	root     fyne.CanvasObject
+	ctx      *widget.Label
+	ask      *widget.Entry
+	feedback *widget.Label
+	askBtn   *widget.Button
+	refresh  func()
+}
 
-	chat := widget.NewMultiLineEntry()
-	chat.SetPlaceHolder("Ask about the active session…")
-	chat.Wrapping = fyne.TextWrapWord
-	chat.SetMinRowsVisible(4)
+// NewCursorPane builds the side pane (same as NewCursorAskPane).
+func NewCursorPane(w fyne.Window, hooks CursorPaneHooks) *CursorAskPane {
+	return NewCursorAskPane(w, hooks)
+}
 
-	evidence := widget.NewMultiLineEntry()
-	evidence.SetPlaceHolder("Session scrollback / evidence")
-	evidence.Wrapping = fyne.TextWrapWord
-	evidence.SetMinRowsVisible(6)
+// NewCursorAskStrip keeps the old name for callers; returns the pane content only.
+func NewCursorAskStrip(w fyne.Window, hooks CursorPaneHooks) fyne.CanvasObject {
+	return NewCursorAskPane(w, hooks).Content()
+}
 
-	log := widget.NewLabel("")
-	log.Wrapping = fyne.TextWrapWord
+// NewCursorAskPane builds Ask + feedback bound to ActiveTerminal scrollback.
+func NewCursorAskPane(w fyne.Window, hooks CursorPaneHooks) *CursorAskPane {
+	p := &CursorAskPane{hooks: hooks}
 
-	appendLog := func(msg string) {
-		if strings.TrimSpace(msg) == "" {
-			return
+	p.ctx = widget.NewLabel("")
+	p.ctx.Wrapping = fyne.TextWrapWord
+
+	p.feedback = widget.NewLabel("Ask a question about the active SSH session.\nScrollback is sent as evidence to Cursor Cloud Agents.")
+	p.feedback.Wrapping = fyne.TextWrapWord
+	p.feedback.Importance = widget.LowImportance
+
+	p.ask = widget.NewMultiLineEntry()
+	p.ask.SetPlaceHolder("Ask about this session…")
+	p.ask.SetMinRowsVisible(3)
+
+	p.refresh = func() {
+		text := ""
+		if p.hooks.ActiveContext != nil {
+			text = strings.TrimSpace(p.hooks.ActiveContext())
 		}
-		cur := strings.TrimSpace(log.Text)
-		if cur != "" {
-			cur += "\n"
+		if text == "" {
+			p.ctx.SetText("Not bound to a terminal.\nOpen or select an SSH tab.")
+			p.ctx.Importance = widget.DangerImportance
+			p.ask.Disable()
+			if p.askBtn != nil {
+				p.askBtn.Disable()
+			}
+		} else {
+			p.ctx.SetText("Session: " + text)
+			p.ctx.Importance = widget.MediumImportance
+			p.ask.Enable()
+			if p.askBtn != nil {
+				p.askBtn.Enable()
+			}
 		}
-		log.SetText(cur + msg)
+		p.ctx.Refresh()
 	}
 
-	refreshCtx := func() {
-		if hooks.ActiveContext != nil {
-			ctx.SetText(hooks.ActiveContext())
+	setBusy := func(busy bool) {
+		if busy {
+			p.ask.Disable()
+			if p.askBtn != nil {
+				p.askBtn.Disable()
+			}
+			return
 		}
+		p.refresh()
 	}
 
-	refreshCtxBtn := widget.NewButtonWithIcon("Refresh context", theme.ViewRefreshIcon(), func() {
-		refreshCtx()
-		appendLog("Context refreshed")
-	})
-
-	gatherBtn := widget.NewButtonWithIcon("Gather scrollback", theme.DocumentIcon(), func() {
-		if hooks.GatherScrollback == nil {
-			return
-		}
-		text, err := hooks.GatherScrollback(false)
-		if err != nil {
-			appendLog("Gather failed: " + err.Error())
-			return
-		}
-		evidence.SetText(text)
-		appendLog("Gathered active session scrollback")
-	})
-
-	sendBtn := widget.NewButtonWithIcon("Send to SSH", theme.MailSendIcon(), func() {
-		cmd := strings.TrimSpace(chat.Text)
-		if cmd == "" {
-			return
-		}
-		if hooks.SendToActive == nil {
-			appendLog("Send not available")
-			return
-		}
-		if !strings.HasSuffix(cmd, "\n") {
-			cmd += "\n"
-		}
-		if err := hooks.SendToActive(cmd); err != nil {
-			appendLog("Send failed: " + err.Error())
-			return
-		}
-		appendLog("Sent command to active session")
-		chat.SetText("")
-	})
-
-	askBtn := widget.NewButtonWithIcon("Ask Cursor", theme.MailSendIcon(), func() {
-		if hooks.AskCursor == nil {
-			appendLog("Cursor API not configured")
-			return
-		}
-		q := strings.TrimSpace(chat.Text)
+	runAsk := func() {
+		q := strings.TrimSpace(p.ask.Text)
 		if q == "" {
-			dialog.ShowInformation("Cursor", "Type a question first.", w)
 			return
 		}
-		prompt := buildCursorPrompt(q, ctx.Text, evidence.Text)
-		appendLog("Asking Cursor…")
+		p.refresh()
+		ctxText := ""
+		if p.hooks.ActiveContext != nil {
+			ctxText = strings.TrimSpace(p.hooks.ActiveContext())
+		}
+		if ctxText == "" {
+			p.setFeedback("Not bound to a terminal — select an SSH tab first.", true)
+			return
+		}
+		if p.hooks.AskCursor == nil {
+			p.setFeedback("Cursor API not configured — add a key in Settings → Tools.", true)
+			return
+		}
+		evidence := ""
+		if p.hooks.GatherScrollback != nil {
+			text, err := p.hooks.GatherScrollback(false)
+			if err != nil {
+				p.setFeedback("Cannot read terminal scrollback: "+err.Error(), true)
+				return
+			}
+			evidence = text
+		}
+		prompt := buildCursorPrompt(q, ctxText, evidence)
+		p.setFeedback(fmt.Sprintf("Asking Cursor… (%d chars of scrollback)", len(evidence)), false)
+		setBusy(true)
 		go func() {
-			sum, err := hooks.AskCursor(prompt)
+			sum, err := p.hooks.AskCursor(prompt)
 			fyne.Do(func() {
+				setBusy(false)
 				if err != nil {
-					appendLog("Cursor error: " + err.Error())
+					p.setFeedback("Error: "+err.Error(), true)
 					return
 				}
-				appendLog("Cursor agent started")
-				if sum != "" {
-					evidence.SetText(mergeEvidence(evidence.Text, "=== CURSOR ===\n"+sum))
+				if strings.TrimSpace(sum) == "" {
+					p.setFeedback("Agent started — check the Cursor Agents dashboard.", false)
+				} else {
+					p.setFeedback(sum, false)
 				}
 			})
 		}()
-	})
-
-	scriptNames := []string{}
-	if hooks.ScriptNames != nil {
-		scriptNames = hooks.ScriptNames()
 	}
-	scriptSel := widget.NewSelect(scriptNames, nil)
-	if len(scriptNames) > 0 {
-		scriptSel.SetSelected(scriptNames[0])
-	}
-	runScript := widget.NewButtonWithIcon("Run script", theme.MediaPlayIcon(), func() {
-		if hooks.RunScript == nil || scriptSel.Selected == "" {
-			return
-		}
-		if err := hooks.RunScript(scriptSel.Selected); err != nil {
-			appendLog("Script failed: " + err.Error())
-			return
-		}
-		appendLog("Ran script: " + scriptSel.Selected)
-	})
 
-	header := widget.NewLabelWithStyle("Cursor AI", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	sub := widget.NewLabel("Uses active SSH scrollback. Suggested commands can be sent back to the session.")
-	sub.Wrapping = fyne.TextWrapWord
+	p.askBtn = widget.NewButtonWithIcon("Ask Cursor", theme.MailSendIcon(), runAsk)
+	p.askBtn.Importance = widget.HighImportance
 
-	tools := container.NewHBox(refreshCtxBtn, gatherBtn, runScript, scriptSel, sendBtn, askBtn)
+	title := widget.NewLabelWithStyle("Cursor AI", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	hint := widget.NewLabel("Uses the active SSH tab’s scrollback as evidence.")
+	hint.Importance = widget.LowImportance
+	hint.Wrapping = fyne.TextWrapWord
 
-	body := container.NewVBox(
-		header,
-		sub,
-		widget.NewLabel("Active session"),
-		ctx,
-		tools,
-		widget.NewLabel("Evidence"),
-		evidence,
-		widget.NewLabel("Question / command"),
-		chat,
-		widget.NewLabel("Activity"),
-		log,
+	fbScroll := container.NewVScroll(p.feedback)
+	fbScroll.SetMinSize(fyne.NewSize(180, 160))
+
+	p.root = container.NewBorder(
+		container.NewVBox(title, p.ctx, hint, widget.NewSeparator()),
+		container.NewVBox(p.ask, p.askBtn),
+		nil, nil,
+		container.NewPadded(fbScroll),
 	)
-	return container.NewVScroll(body)
+	p.refresh()
+	return p
+}
+
+func (p *CursorAskPane) setFeedback(text string, danger bool) {
+	if p == nil || p.feedback == nil {
+		return
+	}
+	p.feedback.SetText(text)
+	if danger {
+		p.feedback.Importance = widget.DangerImportance
+	} else {
+		p.feedback.Importance = widget.MediumImportance
+	}
+	p.feedback.Refresh()
+}
+
+// Content is the side-pane object for Shell.SetRight.
+func (p *CursorAskPane) Content() fyne.CanvasObject {
+	if p == nil {
+		return nil
+	}
+	return p.root
+}
+
+// Refresh updates the bound-session line (call on tab change / connect).
+func (p *CursorAskPane) Refresh() {
+	if p != nil && p.refresh != nil {
+		p.refresh()
+	}
 }
 
 func buildCursorPrompt(question, context, evidence string) string {
 	var b strings.Builder
-	b.WriteString("PathfinderSSH MSP — network troubleshooting.\n\n")
+	b.WriteString("PathfinderSSH MSP — network troubleshooting.\n")
+	b.WriteString("You are advising an MSP engineer. Do NOT modify repository code unless asked.\n")
+	b.WriteString("Answer with diagnosis steps and exact CLI commands when useful.\n\n")
 	if strings.TrimSpace(context) != "" {
 		b.WriteString("SESSION CONTEXT:\n")
 		b.WriteString(context)
@@ -175,22 +198,12 @@ func buildCursorPrompt(question, context, evidence string) string {
 		b.WriteString("TERMINAL EVIDENCE:\n")
 		b.WriteString(evidence)
 		b.WriteString("\n\n")
+	} else {
+		b.WriteString("TERMINAL EVIDENCE: (empty scrollback)\n\n")
 	}
 	b.WriteString("OPERATOR QUESTION:\n")
 	b.WriteString(question)
 	return b.String()
-}
-
-func mergeEvidence(prev, block string) string {
-	prev = strings.TrimSpace(prev)
-	block = strings.TrimSpace(block)
-	if prev == "" {
-		return block
-	}
-	if block == "" {
-		return prev
-	}
-	return prev + "\n\n" + block
 }
 
 // CursorPaneTitle is the splitter tab label when embedded elsewhere.
@@ -215,7 +228,7 @@ func FormatActiveContext(title, customer, folder, target string, active bool) st
 		parts = append(parts, "(active)")
 	}
 	if len(parts) == 0 {
-		return "No active SSH session"
+		return ""
 	}
 	return strings.Join(parts, " · ")
 }
