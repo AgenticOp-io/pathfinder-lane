@@ -2,7 +2,7 @@
 
 **What it is:** A single Windows desktop app for network engineers — SSH/telnet/serial terminals, discovery crawl, config capture, topology maps, and an MSP-oriented session inventory — extended for managed service providers with customer folders, RMM/doc integrations, and optional cloud sign-in.
 
-**What it is not:** A hosted SaaS, a replacement for your PSA, or upstream PathfinderSSH itself. This tree is a **GPL-3.0 derivative** maintained by AgenticOps (`pathfinderssh-msp`). The original engine and vision are Scott Peterman’s [PathfinderSSH](https://github.com/scottpeterman/pathfinderssh).
+**What it is not:** A hosted SaaS, a replacement for your PSA, or upstream PathfinderSSH itself. This tree is a **GPL-3.0 derivative** maintained by AgenticOps (`pathfinder-lane`). The original engine and vision are Scott Peterman’s [PathfinderSSH](https://github.com/scottpeterman/pathfinderssh).
 
 ---
 

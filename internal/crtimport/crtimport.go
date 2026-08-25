@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -225,15 +226,39 @@ func Folders(list []Session) (folders []sessions.Folder, supported, skipped int)
 	return root.Folders, supported, skipped
 }
 
-// DefaultConfig returns the usual Windows VanDyke Config path, or "".
+// DefaultConfig returns the usual SecureCRT Config directory for this OS, or "".
 func DefaultConfig() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	p := filepath.Join(home, "AppData", "Roaming", "VanDyke", "Config")
-	if st, err := os.Stat(p); err == nil && st.IsDir() {
-		return p
+	var cands []string
+	switch runtime.GOOS {
+	case "windows":
+		cands = []string{
+			filepath.Join(home, "AppData", "Roaming", "VanDyke", "Config"),
+		}
+		if app := strings.TrimSpace(os.Getenv("APPDATA")); app != "" {
+			cands = append(cands, filepath.Join(app, "VanDyke", "Config"))
+		}
+	case "darwin":
+		cands = []string{
+			filepath.Join(home, "Library", "Application Support", "VanDyke", "SecureCRT", "Config"),
+			filepath.Join(home, "Library", "Application Support", "VanDyke", "Config"),
+		}
+	default:
+		cands = []string{
+			filepath.Join(home, ".vandyke", "SecureCRT", "Config"),
+			filepath.Join(home, ".SecureCRT", "Config"),
+		}
+	}
+	for _, p := range cands {
+		if p == "" {
+			continue
+		}
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			return p
+		}
 	}
 	return ""
 }

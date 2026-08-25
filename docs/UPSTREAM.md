@@ -1,11 +1,11 @@
 # Upstream PathfinderSSH engine
 
-PathfinderSSH MSP is a **GPL-3.0 derivative** of Scott Peterman’s [PathfinderSSH](https://github.com/scottpeterman/pathfinderssh).
+Pathfinder Lane is a **GPL-3.0 derivative** of Scott Peterman’s [PathfinderSSH](https://github.com/scottpeterman/pathfinderssh).
 
 | | |
 |--|--|
 | **Upstream repo** | https://github.com/scottpeterman/pathfinderssh |
-| **MSP repo** | https://github.com/AgenticOp-io/pathfinderssh-msp |
+| **Product repo** | https://github.com/AgenticOp-io/pathfinder-lane |
 
 ## What upstream owns
 

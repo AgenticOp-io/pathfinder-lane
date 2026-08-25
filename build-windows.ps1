@@ -8,6 +8,7 @@
 #        .\build-windows.ps1 -Targets pathfinder,pfvault
 #        .\build-windows.ps1 -Targets gui               # only the Fyne front ends
 #        .\build-windows.ps1 -Targets cli               # only the console tools
+#        .\build-windows.ps1 -Targets crt               # SecureCRT companion (pathfinder-crt, pfcrt-install, pflane)
 #        .\build-windows.ps1 -Strip:$false              # keep symbols (debugging)
 #        .\build-windows.ps1 -Console                   # force a console on the GUI apps too
 #        .\build-windows.ps1 -Version v0.93.1           # override the stamped version
@@ -130,6 +131,8 @@ if ($select.Count -eq 1 -and $select[0] -eq "all") {
     $list = @($all | Where-Object { Test-Gui $_ })
 } elseif ($select.Count -eq 1 -and $select[0] -eq "installers") {
     $list = @("pathfinder", "pathfinder-msp", "pfseed", "pfinstall", "pfengineer-install", "pfsetup-msp", "pfsetup-o365", "pfsetup-google", "pfsetup-apis")
+} elseif ($select.Count -eq 1 -and $select[0] -eq "crt") {
+    $list = @("pathfinder-crt", "pfcrt-install", "pflane")
 } elseif ($select.Count -eq 1 -and $select[0] -eq "cli") {
     $list = @($all | Where-Object { -not (Test-Gui $_) })
 } else {

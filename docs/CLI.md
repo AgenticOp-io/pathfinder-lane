@@ -44,10 +44,13 @@ Environment:
 
 | Command | Purpose |
 | --- | --- |
+| `pflane` | Cross-platform last-mile CLI: map folders, `create-all` for OpenSSH / SecureCRT / PuTTY |
 | `pfseed` | Headless seeds, Auvik sync (`pfseed sync-auvik`) |
 | `crawl` | BFS network discovery |
 | `capture` | Config capture runner |
 | `mapview` | Local map HTTP viewer |
 | `pfvault` | Vault CLI utilities |
+
+`pflane` is the engineer-facing CLI for existing SSH clients. See [PFLANE.md](PFLANE.md).
 
 Run from repo root after `go build ./cmd/<name>` or from the installed AppData `bin` folder.

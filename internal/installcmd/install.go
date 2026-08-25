@@ -1,4 +1,4 @@
-﻿package installcmd
+package installcmd
 
 import (
 	"fmt"
@@ -65,4 +65,3 @@ func applySetup(opts Options) error {
 	}
 	return fmt.Errorf("unknown setup mode %q (use solo)", setup)
 }
-

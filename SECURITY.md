@@ -11,7 +11,7 @@ Please report security issues **privately first** — do not open a public GitHu
 
 Include what you observed, how to reproduce it, and which binary/commit you used (`pathfinder.exe -version` / `git describe` if building from source). We will acknowledge receipt and work with you on a fix before any public disclosure.
 
-For non-security bugs, use the normal issue tracker on https://github.com/AgenticOp-io/pathfinderssh-msp.
+For non-security bugs, use the normal issue tracker on https://github.com/AgenticOp-io/pathfinder-lane.
 
 ## Security stance (non-negotiable)
 

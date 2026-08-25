@@ -1,8 +1,5 @@
 # Build output.
-#
-# The repo was rebuilt clean once already to purge committed binaries. The
-# front ends are 5-35 MB each and a bare `git add .` puts every one of them
-# back, so the binary names are listed explicitly as well as bin/.
+dist/
 bin/
 /capture
 /captureui

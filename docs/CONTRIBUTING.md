@@ -1,8 +1,8 @@
-# Contributing to PathfinderSSH MSP
+# Contributing to Pathfinder Lane
 
 | Remote | URL | Use |
 | --- | --- | --- |
-| `origin` | https://github.com/AgenticOp-io/pathfinderssh-msp | Push feature branches (`candidate/*`) |
+| `origin` | https://github.com/AgenticOp-io/pathfinder-lane | Push feature branches (`candidate/*`) |
 | `upstream` | https://github.com/scottpeterman/pathfinderssh | Fetch portable engine fixes |
 
 Packaging and Windows installers: `products/pathfinder-msp/` in the AgenticOps umbrella.
@@ -35,7 +35,7 @@ Agents push to `candidate/*` only — merge to `main` is human / PR.
 
 | Change | Land in |
 | --- | --- |
-| MSP integrations, auth, UI chrome | this repo (`pathfinderssh-msp`) |
+| Last-mile plane, pflane, CRT bridge | this repo (`pathfinder-lane`) |
 | Portable crawl / vault / terminal fixes | PR to `scottpeterman/pathfinderssh` |
 | Installers / `pfinstall.exe` | `cmd/pfinstall`, `dist/windows/` |
 

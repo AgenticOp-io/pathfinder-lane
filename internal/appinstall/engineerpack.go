@@ -1,4 +1,4 @@
-﻿package appinstall
+package appinstall
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 )
 
 // Engineer bundle: MSP client apps only â€” no admin setup/security tools.
-var EngineerBundleTools = []string{"pathfinder", "pfseed"}
+var EngineerBundleTools = []string{"pathfinder", "pfseed", "pflane"}
 
 // EngineerPackOptions configures branded engineer standalone installer output.
 type EngineerPackOptions struct {
@@ -138,4 +138,3 @@ func sanitizeFileStem(s string) string {
 	}
 	return s
 }
-

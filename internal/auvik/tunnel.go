@@ -643,6 +643,19 @@ func stableLocalPort(key string) int {
 	return 42000 + n%10000
 }
 
+// MappingKey is domain:ip:remote used to reuse AuvikTunnel processes.
+func MappingKey(domain, deviceIP string, remotePort int) string {
+	if remotePort <= 0 {
+		remotePort = 22
+	}
+	return strings.TrimSpace(domain) + ":" + strings.TrimSpace(deviceIP) + ":" + strconv.Itoa(remotePort)
+}
+
+// MappingListenPort is the localhost port AuvikTunnel binds for this mapping.
+func MappingListenPort(domain, deviceIP string, remotePort int) int {
+	return stableLocalPort(MappingKey(domain, deviceIP, remotePort))
+}
+
 // portListening reports whether 127.0.0.1:port is taken without Dial+Close
 // (those probes abort Auvik work sessions).
 func portListening(port int) bool {

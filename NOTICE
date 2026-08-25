@@ -8,7 +8,7 @@ This program is a modified version of PathfinderSSH.
   Upstream license: GNU General Public License v3.0 (GPL-3.0)
 
   MSP edition: AgenticOp-io / AgenticOps
-  MSP source: https://github.com/AgenticOp-io/pathfinderssh-msp
+  Product source: https://github.com/AgenticOp-io/pathfinder-lane
 
 The complete corresponding source for any binary we distribute is available
 from the MSP repository above under the same GPL-3.0 terms. See the file

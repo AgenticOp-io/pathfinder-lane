@@ -1,4 +1,4 @@
-﻿package appinstall
+package appinstall
 
 import (
 	"fmt"
@@ -12,6 +12,7 @@ import (
 var BundledTools = []string{
 	"pathfinder", "pathfinder-msp", "pfseed", "pfinstall", "pfengineer-install",
 	"pfsetup-msp", "pfsetup-o365", "pfsetup-google", "pfsetup-apis",
+	"pflane",
 	"AuvikTunnel",
 }
 
@@ -53,4 +54,3 @@ func CopyToolBundle(srcDir, destDir string) (bool, error) {
 func isPathfinderExe(path string) bool {
 	return strings.EqualFold(filepath.Base(path), exeName("pathfinder"))
 }
-

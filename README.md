@@ -1,14 +1,16 @@
-# PathfinderSSH MSP
+# Pathfinder Lane
 
-**AgenticOps edition** ΓÇö network terminal, crawl, map, and MSP inventory for Windows.
+**Last-mile laptop plane** — engineers keep SecureCRT, PuTTY, and OpenSSH. Setup is a customer map; opening a session brings the right VPN up.
 
 | | |
 |--|--|
-| **Repo** | https://github.com/AgenticOp-io/pathfinderssh-msp |
+| **Repo** | https://github.com/AgenticOp-io/pathfinder-lane |
 | **Upstream engine** | [PathfinderSSH](https://github.com/scottpeterman/pathfinderssh) (Scott Peterman, GPL-3.0) |
-| **License** | GPL-3.0 ΓÇö see `LICENSE` and `NOTICE` |
+| **License** | GPL-3.0 — see `LICENSE` and `NOTICE` |
 
-PathfinderSSH MSP is a derivative work. Upstream owns the core terminal/crawl/map engine; AgenticOps owns this MSP packaging, integrations, and documentation.
+This is a **GPL-3.0 derivative** of PathfinderSSH. AgenticOps does **not** own upstream PathfinderSSH. The previous MSP GitHub repo (`pathfinderssh-msp`) is retired; product work lives here.
+
+CLI: [`docs/PFLANE.md`](docs/PFLANE.md) (`pflane setup` then the SSH client they already use).
 
 ![MSP main window ΓÇö session tree and toolbar](docs/images/msp-main-window.svg)
 
@@ -49,7 +51,10 @@ Full guide: [docs/INSTALL.md](docs/INSTALL.md)
   - Vault: IT Glue, Hudu, Passportal
   - PSA: ConnectWise, Autotask, Halo (+ JSON file adapter)
 - **Sign-in** - Solo hides integration UI; Microsoft 365 or Google unlocks the MSP stack
-- **Cursor AI** (optional) - troubleshoot pane + Cloud Agents API## Build
+- **pflane** - keep SecureCRT, PuTTY, or OpenSSH (`create-all` on Windows/Linux/Mac)
+- **Cursor AI** (optional) - troubleshoot pane + Cloud Agents API
+
+## Build
 
 ```bash
 go build -ldflags "-s -w -H windowsgui" -o pathfinder.exe ./cmd/pathfinder

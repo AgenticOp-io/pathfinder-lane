@@ -76,6 +76,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/evidence"
 	helpdoc "github.com/scottpeterman/pathfinderssh/internal/help"
 	"github.com/scottpeterman/pathfinderssh/internal/itglue"
+	"github.com/scottpeterman/pathfinderssh/internal/lanectl"
 	"github.com/scottpeterman/pathfinderssh/internal/mapweb"
 	"github.com/scottpeterman/pathfinderssh/internal/mspauth"
 	"github.com/scottpeterman/pathfinderssh/internal/pfbridge"
@@ -2185,7 +2186,7 @@ func (h *host) askCursorAgent(prompt string) (string, error) {
 	}
 	repo := strings.TrimSpace(h.base.CursorRepo)
 	if repo == "" {
-		repo = "https://github.com/AgenticOp-io/pathfinderssh-msp"
+		repo = "https://github.com/AgenticOp-io/pathfinder-lane"
 	}
 	ref := strings.TrimSpace(h.base.CursorRepoRef)
 	if ref == "" {
@@ -3017,6 +3018,18 @@ func (h *host) exportSessions() {
 	d.Show()
 }
 
+func ensureLaneVPN(ctx context.Context, folder string, n sessions.Node) {
+	if !n.Transport.IsNetwork() {
+		return
+	}
+	if n.Jump.InUse() {
+		log.Printf("[lane] vpn then jump %s", n.Jump.Host)
+	}
+	if err := lanectl.PrepareConnect(ctx, folder, n.Name, n.Host); err != nil {
+		log.Printf("[lane] vpn: %v — connecting anyway", err)
+	}
+}
+
 func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(sessions.Node)) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -3066,6 +3079,7 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 		if h.tree != nil {
 			dialNode = auvik.EnrichTunnelDomain(home, folder, dialNode, h.tree.Tree())
 		}
+		ensureLaneVPN(ctx, folder, dialNode)
 		var tp term.Transport
 		var err error
 		if auvik.ShouldUseTunnelFirst(dialNode, home) {
@@ -3246,6 +3260,7 @@ func (h *host) reconnectTerminal(sess *ui.Session, inst *ui.Instance, folder str
 			dialNode = auvik.EnrichTunnelDomain(home, folder, dialNode, h.tree.Tree())
 		}
 		h.releaseAuvikTunnelForNode(dialNode)
+		ensureLaneVPN(ctx, folder, dialNode)
 		var tp term.Transport
 		var err error
 		if auvik.ShouldUseTunnelFirst(dialNode, home) {
@@ -4618,7 +4633,7 @@ func (h *host) hostPaths() []ui.AboutDetail {
 	return []ui.AboutDetail{
 		{Label: "License", Value: "GNU GPL v3.0 — free software; you may redistribute under the same terms"},
 		{Label: "Based on", Value: "PathfinderSSH by Scott Peterman (https://github.com/scottpeterman/pathfinderssh)"},
-		{Label: "MSP source", Value: "https://github.com/AgenticOp-io/pathfinderssh-msp"},
+		{Label: "Source", Value: "https://github.com/AgenticOp-io/pathfinder-lane"},
 		{Label: "Vault", Value: vaultPath},
 		{Label: "Sessions", Value: h.sessionsPath},
 		{Label: "Captures", Value: h.lastCapture.Params.StorePath},

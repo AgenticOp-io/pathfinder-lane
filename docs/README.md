@@ -1,7 +1,7 @@
 # PathfinderSSH MSP — documentation index
 
 AgenticOps fork of [PathfinderSSH](https://github.com/scottpeterman/pathfinderssh) (Scott Peterman).  
-Repo: https://github.com/AgenticOp-io/pathfinderssh-msp · License: **GPL-3.0**
+Repo: https://github.com/AgenticOp-io/pathfinder-lane · License: **GPL-3.0**
 
 ## Start here
 
@@ -10,6 +10,8 @@ Repo: https://github.com/AgenticOp-io/pathfinderssh-msp · License: **GPL-3.0**
 | [**MSP-SYNOPSIS.md**](MSP-SYNOPSIS.md) | Everyone | What we built — executive summary |
 | [**MSP-FEATURES.md**](MSP-FEATURES.md) | Engineers / MSP staff | Feature catalog with UI paths |
 | [**INSTALL.md**](INSTALL.md) | Installers | GUI installer, cloud sign-in, paths |
+| [**CRT-BRIDGE.md**](CRT-BRIDGE.md) | Engineers | SecureCRT + Auvik tunnel companion |
+| [**PFLANE.md**](PFLANE.md) | Engineers | Cross-platform CLI: OpenSSH, CRT, PuTTY |
 
 ## Integrations (cohesive MSP stack)
 
@@ -43,6 +45,7 @@ Repo: https://github.com/AgenticOp-io/pathfinderssh-msp · License: **GPL-3.0**
 | --- | --- |
 | [**ARCHITECTURE.md**](ARCHITECTURE.md) | Packages, data flow, file layout |
 | [**CLI.md**](CLI.md) | Binaries and command-line flags |
+| [**PFLANE.md**](PFLANE.md) | `pflane` create-all (OpenSSH / CRT / PuTTY) |
 | [**OPERATIONS.md**](OPERATIONS.md) | Day-to-day MSP workflows |
 | [**CONTRIBUTING.md**](CONTRIBUTING.md) | Build and branch workflow |
 
