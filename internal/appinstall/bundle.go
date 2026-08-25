@@ -12,7 +12,7 @@ import (
 var BundledTools = []string{
 	"pathfinder", "pathfinder-msp", "pfseed", "pfinstall", "pfengineer-install",
 	"pfsetup-msp", "pfsetup-o365", "pfsetup-google", "pfsetup-apis",
-	"pflane",
+	"lane",
 	"AuvikTunnel",
 }
 

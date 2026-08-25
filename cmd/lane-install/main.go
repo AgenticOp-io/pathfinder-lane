@@ -1,11 +1,11 @@
-// pfcrt-install — standalone SecureCRT companion installer.
+// lane-install — standalone SecureCRT companion installer.
 // Pathfinder stays a separate product; this does not rewrite CRT from Pathfinder.
 //
-//	pfcrt-install.exe                 graphical wizard (install or update)
-//	pfcrt-install.exe -install        CLI install / rewrite SecureCRT sessions
-//	pfcrt-install.exe -update         same as -install
-//	pfcrt-install.exe -install -mode mixed|forticlient|auvik
-//	pfcrt-install.exe -uninstall
+//	lane-install.exe                 graphical wizard (install or update)
+//	lane-install.exe -install        CLI install / rewrite SecureCRT sessions
+//	lane-install.exe -update         same as -install
+//	lane-install.exe -install -mode mixed|forticlient|auvik
+//	lane-install.exe -uninstall
 package main
 
 import (
@@ -57,7 +57,7 @@ func main() {
 		vpnMap        = flag.String("vpn-map", "", "Folder=Tunnel lines; everything under the folder uses that VPN")
 		auvikMap      = flag.String("auvik-map", "", "Folder=AuvikTenant lines; everything under the folder uses that tenant")
 		customer      = flag.String("customer-root", "", "SecureCRT customer folder name")
-		from          = flag.String("from", "", "folder containing pathfinder-crt.exe")
+		from          = flag.String("from", "", "folder containing lane-crt.exe")
 		doListVPNs    = flag.Bool("list-vpns", false, "print FortiClient, WireGuard, and Zscaler tunnels on this PC")
 		doListTenants = flag.Bool("list-tenants", false, "print Auvik tenants from the API")
 	)
@@ -165,7 +165,7 @@ func main() {
 		runGUI()
 		return
 	}
-	fmt.Fprintln(os.Stderr, "pfcrt-install: use -install, -install-gui, -uninstall, or -version")
+	fmt.Fprintln(os.Stderr, "lane-install: use -install, -install-gui, -uninstall, or -version")
 	os.Exit(2)
 }
 
@@ -173,19 +173,19 @@ func handleEarlyArgs(args []string) (bool, int) {
 	for _, a := range args {
 		switch a {
 		case "-version", "--version":
-			fmt.Println("pfcrt-install", version)
+			fmt.Println("lane-install", version)
 			return true, 0
 		case "-help", "--help", "-h":
-			fmt.Println("pfcrt-install — install Pathfinder CRT Bridge (standalone SecureCRT companion)")
+			fmt.Println("lane-install — install Lane (standalone SecureCRT companion)")
 			fmt.Println()
-			fmt.Println("  pfcrt-install.exe                         graphical wizard (install or update)")
-			fmt.Println("  pfcrt-install.exe -install -mode mixed    Auvik + FortiClient only where folders are mapped")
-			fmt.Println("  pfcrt-install.exe -update                 refresh binaries and rewrite SecureCRT sessions")
-			fmt.Println("  pfcrt-install.exe -install -mode forticlient  mapped CRT folders (no Auvik)")
-			fmt.Println("  pfcrt-install.exe -list-vpns")
-			fmt.Println("  pfcrt-install.exe -list-tenants")
-			fmt.Println("  pfcrt-install.exe -install -mode auvik")
-			fmt.Println("  pfcrt-install.exe -uninstall")
+			fmt.Println("  lane-install.exe                         graphical wizard (install or update)")
+			fmt.Println("  lane-install.exe -install -mode mixed    Auvik + FortiClient only where folders are mapped")
+			fmt.Println("  lane-install.exe -update                 refresh binaries and rewrite SecureCRT sessions")
+			fmt.Println("  lane-install.exe -install -mode forticlient  mapped CRT folders (no Auvik)")
+			fmt.Println("  lane-install.exe -list-vpns")
+			fmt.Println("  lane-install.exe -list-tenants")
+			fmt.Println("  lane-install.exe -install -mode auvik")
+			fmt.Println("  lane-install.exe -uninstall")
 			return true, 0
 		}
 	}

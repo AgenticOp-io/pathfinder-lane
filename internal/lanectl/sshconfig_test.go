@@ -6,7 +6,7 @@ import (
 )
 
 func TestRenderSSHConfigProxy(t *testing.T) {
-	got := RenderSSHConfig(`/opt/pflane`, []SSHHost{{
+	got := RenderSSHConfig(`/opt/lane`, []SSHHost{{
 		Alias:  "acme-core",
 		Folder: "Acme",
 		Host:   "10.1.1.1",
@@ -21,7 +21,7 @@ func TestRenderSSHConfigProxy(t *testing.T) {
 }
 
 func TestRenderSSHConfigAgent(t *testing.T) {
-	got := RenderSSHConfig("pflane", []SSHHost{{
+	got := RenderSSHConfig("lane", []SSHHost{{
 		Alias:     "acme-core",
 		Folder:    "Acme",
 		Host:      "10.1.1.1",

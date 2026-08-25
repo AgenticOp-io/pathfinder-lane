@@ -5,7 +5,7 @@ PathfinderSSH MSP has **two** install paths. API keys (Auvik, PSA, Cursor, …) 
 | Who | Tool | What it does |
 | --- | --- | --- |
 | **Anyone (standalone)** | `pfinstall.exe` | Installs the app for this Windows profile. No API or cloud setup in the wizard. |
-| **SecureCRT add-on** | `pfcrt-install.exe` | Installs/updates Pathfinder CRT Bridge and rewrites SecureCRT sessions. Independent of Pathfinder. |
+| **SecureCRT add-on** | `lane-install.exe` | Installs/updates Lane and rewrites SecureCRT sessions. Independent of Pathfinder. |
 | **MSP admin** | `pfsetup-msp.exe` | **One** MSP wizard: branding → cloud auth (M365 or Google) → security → engineer laptop packages. |
 | **Engineer** | `*-Engineer-Install.exe` | Branded package from the MSP wizard. Sign in with work account; APIs in Settings if needed. |
 
@@ -29,9 +29,9 @@ Optional integrations (Auvik, PSA, Cursor, …) also live in **Settings → Tool
 
 SecureCRT is a **separate product**. Pathfinder does not rewrite VanDyke sessions.
 
-## SecureCRT add-on (`pfcrt-install.exe`)
+## SecureCRT add-on (`lane-install.exe`)
 
-Standalone installer for **Pathfinder CRT Bridge**. Double-click to install or update.
+Standalone installer for **Lane**. Double-click to install or update.
 
 - Detects `%AppData%\Roaming\VanDyke\Config\Sessions`
 - First run: backup + rewrite matching SSH sessions to localhost proxies
@@ -39,7 +39,7 @@ Standalone installer for **Pathfinder CRT Bridge**. Double-click to install or u
 - Restarts the background agent so FortiClient auto-connect/switch is live
 - See [CRT-BRIDGE.md](CRT-BRIDGE.md)
 
-Build: `.\build-windows.ps1 -Targets crt` → `dist\windows\pfcrt-install.exe`
+Build: `.\build-windows.ps1 -Targets crt` → `dist\windows\lane-install.exe`
 
 ## 2. MSP installation (`pfsetup-msp.exe`)
 
@@ -87,9 +87,9 @@ No Azure/Google registration or security admin on engineer PCs.
 .\build-windows.ps1 -Targets crt
 ```
 
-`crt` builds `pathfinder-crt.exe`, `pfcrt-install.exe`, and `pflane.exe` (SecureCRT companion + last-mile CLI). Pathfinder installers do not include them.
+`crt` builds `lane-crt.exe`, `lane-install.exe`, and `lane.exe` (SecureCRT companion + last-mile CLI). Pathfinder installers do not include them.
 
-Engineers who live in OpenSSH or PuTTY (Windows, Linux, or Mac) should use `pflane create-all` after the folder map — see [PFLANE.md](PFLANE.md).
+Engineers who live in OpenSSH or PuTTY (Windows, Linux, or Mac) should use `lane create-all` after the folder map — see [LANE.md](LANE.md).
 
 This builds `pathfinder.exe`, `pathfinder-msp.exe`, and the setup tools into `dist\windows\`, then runs `pfinstall.exe -install`.
 
@@ -99,8 +99,8 @@ This builds `pathfinder.exe`, `pathfinder-msp.exe`, and the setup tools into `di
 | --- | --- |
 | `%LOCALAPPDATA%\PathfinderSSH-MSP\` | Install root, enrollment, branding, security policy |
 | `%USERPROFILE%\.pathfinderssh\` | sessions, vault, maps, `settings.json`, `msp-bridge.json` (while app running) |
-| `%LOCALAPPDATA%\PathfinderCRT-Bridge\` | Standalone SecureCRT companion binaries |
-| `%USERPROFILE%\.pathfinder-crt\` | CRT companion config, backups, logs |
+| `%LOCALAPPDATA%\Lane\` | Standalone SecureCRT companion binaries |
+| `%USERPROFILE%\.lane\` | Lane config, backups, logs |
 
 See also [CURSOR-MSP.md](./CURSOR-MSP.md) for Cursor IDE integration.
 

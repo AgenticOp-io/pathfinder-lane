@@ -11,7 +11,7 @@ import (
 )
 
 // Engineer bundle: MSP client apps only â€” no admin setup/security tools.
-var EngineerBundleTools = []string{"pathfinder", "pfseed", "pflane"}
+var EngineerBundleTools = []string{"pathfinder", "pfseed", "lane"}
 
 // EngineerPackOptions configures branded engineer standalone installer output.
 type EngineerPackOptions struct {

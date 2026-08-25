@@ -52,7 +52,7 @@ func RunProxy(ctx context.Context, appHome, folder, host string, port int, in io
 		}, vpn)
 		cancel()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "pflane: vpn %s: %v — connecting to %s anyway\n", vpn, err, host)
+			fmt.Fprintf(os.Stderr, "lane: vpn %s: %v — connecting to %s anyway\n", vpn, err, host)
 		}
 	}
 
@@ -86,7 +86,7 @@ func ensureAuvik(ctx context.Context, appHome string, cfg crtbridge.Settings, wa
 	}
 	m, ok := crtbridge.ResolveAuvik(want, tenants, tm)
 	if !ok || m.Domain == "" {
-		fmt.Fprintf(os.Stderr, "pflane: auvik %q not resolved — connecting to %s directly\n", want, host)
+		fmt.Fprintf(os.Stderr, "lane: auvik %q not resolved — connecting to %s directly\n", want, host)
 		return 0, false
 	}
 	tmgr := auvik.NewTunnelManager(cfg.TunnelBin)
@@ -94,7 +94,7 @@ func ensureAuvik(ctx context.Context, appHome string, cfg crtbridge.Settings, wa
 	tmgr.SetCredentials(cfg.AuvikUser, cfg.AuvikKey, cfg.AuvikBase)
 	local, err := tmgr.Ensure(ctx, m.Domain, host, port, 0)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pflane: auvik tunnel %s: %v — connecting to %s directly\n", m.Domain, err, host)
+		fmt.Fprintf(os.Stderr, "lane: auvik tunnel %s: %v — connecting to %s directly\n", m.Domain, err, host)
 		return 0, false
 	}
 	return local, true

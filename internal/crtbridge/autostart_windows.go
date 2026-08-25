@@ -15,6 +15,7 @@ func startupLnks() []string {
 	dir := filepath.Join(os.Getenv("APPDATA"),
 		"Microsoft", "Windows", "Start Menu", "Programs", "Startup")
 	return []string{
+		filepath.Join(dir, "Lane.lnk"),
 		filepath.Join(dir, "Pathfinder CRT Bridge.lnk"),
 		filepath.Join(dir, "PathfinderSSH CRT Bridge.lnk"),
 	}
@@ -75,17 +76,21 @@ func StartAgent(agentExe string) error {
 	return nil
 }
 
-// StopAgent ends any running pathfinder-crt agent so binaries and session
+// StopAgent ends any running lane-crt agent so binaries and session
 // files can be updated.
 func StopAgent() error {
 	stopServePID()
-	cmd := winexec.Command("taskkill", "/IM", "pathfinder-crt.exe", "/F")
-	out, err := cmd.CombinedOutput()
-	s := strings.ToLower(string(out))
-	if err == nil || strings.Contains(s, "not found") || strings.Contains(s, "not running") {
-		return nil
+	var last error
+	for _, im := range []string{"lane-crt.exe", "pathfinder-crt.exe"} {
+		cmd := winexec.Command("taskkill", "/IM", im, "/F")
+		out, err := cmd.CombinedOutput()
+		s := strings.ToLower(string(out))
+		if err == nil || strings.Contains(s, "not found") || strings.Contains(s, "not running") {
+			continue
+		}
+		last = fmt.Errorf("stop CRT agent: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	return fmt.Errorf("stop CRT agent: %w (%s)", err, strings.TrimSpace(string(out)))
+	return last
 }
 
 // RestartAgent stops the old agent (if any) and starts exe.
@@ -113,7 +118,7 @@ func writeStartupShortcut(lnk, target, workdir, arguments string) error {
 		argPS = fmt.Sprintf("; $s.Arguments = %s", psQuote(arguments))
 	}
 	ps := fmt.Sprintf(
-		`$s = (New-Object -ComObject WScript.Shell).CreateShortcut(%s); $s.TargetPath = %s; $s.WorkingDirectory = %s%s; $s.WindowStyle = 7; $s.Description = 'Pathfinder CRT Bridge agent'; $s.Save()`,
+		`$s = (New-Object -ComObject WScript.Shell).CreateShortcut(%s); $s.TargetPath = %s; $s.WorkingDirectory = %s%s; $s.WindowStyle = 7; $s.Description = 'Lane agent'; $s.Save()`,
 		psQuote(lnk), psQuote(target), psQuote(workdir), argPS,
 	)
 	cmd := winexec.Command("powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps)

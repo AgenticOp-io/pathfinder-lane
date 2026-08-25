@@ -10,18 +10,23 @@ import (
 )
 
 const (
-	launchdLabel     = "io.agenticop.pflane-serve"
-	systemdUnitName  = "pflane-serve.service"
-	servePIDFileName = "pflane-serve.pid"
+	launchdLabel     = "io.agenticop.lane-serve"
+	systemdUnitName  = "lane-serve.service"
+	servePIDFileName = "lane-serve.pid"
 )
 
-func isPflaneExe(exe string) bool {
+func isLaneExe(exe string) bool {
 	base := strings.ToLower(filepath.Base(exe))
-	return base == "pflane" || base == "pflane.exe"
+	switch base {
+	case "lane", "lane.exe", "pflane", "pflane.exe":
+		return true
+	default:
+		return false
+	}
 }
 
 func agentExtraArgs(exe string) []string {
-	if isPflaneExe(exe) {
+	if isLaneExe(exe) {
 		return []string{"serve"}
 	}
 	return nil
@@ -115,9 +120,9 @@ func launchdPlist(args []string) string {
     <true/>
   </dict>
   <key>StandardOutPath</key>
-  <string>` + xmlEscape(filepath.Join(logDir, "pflane-serve.log")) + `</string>
+  <string>` + xmlEscape(filepath.Join(logDir, "lane-serve.log")) + `</string>
   <key>StandardErrorPath</key>
-  <string>` + xmlEscape(filepath.Join(logDir, "pflane-serve.err")) + `</string>
+  <string>` + xmlEscape(filepath.Join(logDir, "lane-serve.err")) + `</string>
 </dict>
 </plist>
 `)
@@ -130,7 +135,7 @@ func systemdUnit(exe string, extra []string) string {
 		cmd += " " + systemdEscape(a)
 	}
 	return `[Unit]
-Description=Pathfinder last-mile CRT agent (pflane serve)
+Description=Lane CRT agent (lane serve)
 
 [Service]
 ExecStart=` + cmd + `

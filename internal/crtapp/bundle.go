@@ -14,8 +14,8 @@ func TunnelExe() string {
 	return filepath.Join(BinDir(), ExeName("AuvikTunnel"))
 }
 
-// CopyBundle installs pathfinder-crt, pfcrt-install, pflane, and AuvikTunnel into
-// %LOCALAPPDATA%\PathfinderCRT-Bridge\bin.
+// CopyBundle installs lane-crt, lane-install, lane, and AuvikTunnel into
+// %LOCALAPPDATA%\Lane\bin.
 func CopyBundle(srcDir string) error {
 	if err := os.MkdirAll(BinDir(), 0o755); err != nil {
 		return err
@@ -25,7 +25,7 @@ func CopyBundle(srcDir string) error {
 			srcDir = filepath.Dir(exe)
 		}
 	}
-	for _, name := range []string{ExeName("pathfinder-crt"), ExeName("pfcrt-install"), ExeName("pflane")} {
+	for _, name := range []string{ExeName("lane-crt"), ExeName("lane-install"), ExeName("lane")} {
 		src := filepath.Join(srcDir, name)
 		if !fileExists(src) {
 			continue
@@ -40,10 +40,10 @@ func CopyBundle(srcDir string) error {
 	}
 	if !fileExists(AgentExe()) {
 		for _, dir := range []string{srcDir, appinstall.BinDir()} {
-			src := filepath.Join(dir, ExeName("pathfinder-crt"))
+			src := filepath.Join(dir, ExeName("lane-crt"))
 			if fileExists(src) && !appinstall.SameFile(src, AgentExe()) {
 				if err := copyFile(src, AgentExe()); err != nil {
-					return fmt.Errorf("copy pathfinder-crt: %w", err)
+					return fmt.Errorf("copy lane-crt: %w", err)
 				}
 				break
 			}
@@ -54,7 +54,7 @@ func CopyBundle(srcDir string) error {
 	}
 	if !fileExists(AgentExe()) {
 		if self, err := os.Executable(); err == nil && fileExists(self) {
-			if strings.EqualFold(filepath.Base(self), ExeName("pathfinder-crt")) {
+			if strings.EqualFold(filepath.Base(self), ExeName("lane-crt")) {
 				if err := copyFile(self, AgentExe()); err != nil {
 					return err
 				}
@@ -62,7 +62,7 @@ func CopyBundle(srcDir string) error {
 		}
 	}
 	if !fileExists(AgentExe()) {
-		return fmt.Errorf("pathfinder-crt.exe not found beside the installer")
+		return fmt.Errorf("lane-crt.exe not found beside the installer")
 	}
 	return nil
 }

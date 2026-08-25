@@ -1,4 +1,4 @@
-// pflane is the cross-platform last-mile CLI: map folders once, then each
+// lane is the cross-platform last-mile CLI: map folders once, then each
 // engineer keeps the SSH client they already use (OpenSSH, SecureCRT, PuTTY).
 package main
 
@@ -91,7 +91,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pflane: %v\n", err)
+		fmt.Fprintf(os.Stderr, "lane: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -101,23 +101,23 @@ func isHelp(s string) bool {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `pflane %s — keep using the SSH client you already have
+	fmt.Fprintf(os.Stderr, `lane %s — keep using the SSH client you already have
 
-  pflane setup                     map VPNs + bind hosts, then write every client
-  pflane bind fw-01 Acme           this PuTTY/ssh name belongs to customer Acme
-  pflane map-set Acme TARGET       Acme → Forti / wireguard:name / zscaler:zpa
-  pflane create-all                rewrite OpenSSH + PuTTY + SecureCRT
+  lane setup                     map VPNs + bind hosts, then write every client
+  lane bind fw-01 Acme           this PuTTY/ssh name belongs to customer Acme
+  lane map-set Acme TARGET       Acme → Forti / wireguard:name / zscaler:zpa
+  lane create-all                rewrite OpenSSH + PuTTY + SecureCRT
 
 Then open the same session as today:
 
   ssh acme-core                    OpenSSH — no daemon
   PuTTY saved session              local proxy — no daemon
   Pathfinder tree                  VPN comes up on Connect
-  SecureCRT session                needs: pflane serve (Windows: pathfinder-crt at logon)
+  SecureCRT session                needs: lane serve (Windows: lane-crt at logon)
 
-  pflane status | list | list-vpns | map | unbind NAME
-  pflane create ssh|crt|putty
-  pflane ssh ALIAS | serve | ensure TARGET | restore-putty | autostart [off]
+  lane status | list | list-vpns | map | unbind NAME
+  lane create ssh|crt|putty
+  lane ssh ALIAS | serve | ensure TARGET | restore-putty | autostart [off]
 `, version)
 }
 
@@ -130,14 +130,14 @@ func cmdStatus() error {
 	if p := lanectl.PATHStatus(); p != "" {
 		fmt.Printf("path: %s\n", p)
 	} else {
-		fmt.Println("path: pflane not on PATH yet — open a new shell after setup")
+		fmt.Println("path: lane not on PATH yet — open a new shell after setup")
 	}
 	fmt.Printf("vpn maps: %d   auvik maps: %d\n", len(cfg.VPNTunnels), len(cfg.AuvikTenants))
 	hosts := lanectl.Discover(cfg, opts.AppHome, opts.CRTConfig)
 	mapped, skipped := lanectl.FilterMapped(cfg, hosts)
 	fmt.Printf("hosts: %d mapped, %d unmapped (left as-is)\n", len(mapped), len(skipped))
 	if crtbridge.SessionsDir(opts.CRTConfig) != "" {
-		fmt.Println("SecureCRT: found — create-all will rewrite mapped sessions; run pflane serve")
+		fmt.Println("SecureCRT: found — create-all will rewrite mapped sessions; run lane serve")
 	} else {
 		fmt.Println("SecureCRT: not found")
 	}
@@ -186,7 +186,7 @@ func cmdMap() error {
 		return err
 	}
 	if len(s.VPNTunnels) == 0 && len(s.AuvikTenants) == 0 {
-		fmt.Println("(no maps)  pflane map-set FOLDER TARGET")
+		fmt.Println("(no maps)  lane map-set FOLDER TARGET")
 		return nil
 	}
 	if len(s.VPNTunnels) > 0 {
@@ -202,7 +202,7 @@ func cmdMap() error {
 
 func cmdMapSet(args []string, auvik bool) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: pflane map-set FOLDER TARGET")
+		return fmt.Errorf("usage: lane map-set FOLDER TARGET")
 	}
 	folder, target := args[0], strings.Join(args[1:], " ")
 	if err := lanectl.MapSet("", folder, target, auvik); err != nil {
@@ -218,7 +218,7 @@ func cmdMapSet(args []string, auvik bool) error {
 
 func cmdBind(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: pflane bind NAME FOLDER")
+		return fmt.Errorf("usage: lane bind NAME FOLDER")
 	}
 	if err := lanectl.BindHost("", args[0], strings.Join(args[1:], " ")); err != nil {
 		return err
@@ -229,7 +229,7 @@ func cmdBind(args []string) error {
 
 func cmdUnbind(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: pflane unbind NAME")
+		return fmt.Errorf("usage: lane unbind NAME")
 	}
 	return lanectl.UnbindHost("", args[0])
 }
@@ -238,13 +238,13 @@ func cmdSetup() error {
 	if dest, err := lanectl.InstallSelf(); err != nil {
 		fmt.Fprintf(os.Stderr, "note: %v\n", err)
 	} else {
-		fmt.Println("pflane installed at", dest)
+		fmt.Println("lane installed at", dest)
 		if p := lanectl.PATHStatus(); p != "" {
 			fmt.Println("on PATH as", p)
 		}
 	}
 	if !lanectl.InteractiveStdin() {
-		fmt.Println("Non-interactive: bind hosts with `pflane bind NAME FOLDER`, then create-all.")
+		fmt.Println("Non-interactive: bind hosts with `lane bind NAME FOLDER`, then create-all.")
 		return cmdCreate(nil, true, true, true)
 	}
 	home := crtapp.Home()
@@ -335,7 +335,7 @@ func printCreate(rep lanectl.CreateReport) {
 	if len(rep.Aliases) > 0 && len(rep.Aliases) <= 20 {
 		fmt.Println("  ssh " + strings.Join(rep.Aliases, "\n  ssh "))
 	} else if len(rep.Aliases) > 20 {
-		fmt.Printf("  %d aliases — pflane list\n", len(rep.Aliases))
+		fmt.Printf("  %d aliases — lane list\n", len(rep.Aliases))
 	}
 	if rep.CRTRan {
 		fmt.Printf("SecureCRT: proxy=%d direct=%d skipped=%d\n", rep.CRT.Tunnelled, rep.CRT.Direct, rep.CRT.Skipped)
@@ -351,7 +351,7 @@ func printCreate(rep lanectl.CreateReport) {
 
 func cmdServe() error {
 	opts := lanectl.BridgeOptions("")
-	fmt.Printf("pflane serve %s (mode %s)\n", version, opts.Settings.Mode)
+	fmt.Printf("lane serve %s (mode %s)\n", version, opts.Settings.Mode)
 	return crtbridge.RunAgent(context.Background(), opts)
 }
 
@@ -372,7 +372,7 @@ func cmdProxy(args []string) error {
 
 func cmdSSH(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: pflane ssh ALIAS [ssh-args]")
+		return fmt.Errorf("usage: lane ssh ALIAS [ssh-args]")
 	}
 	bin, err := exec.LookPath("ssh")
 	if err != nil {
@@ -411,7 +411,7 @@ func fileExistsAgent(p string) bool {
 
 func cmdEnsure(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: pflane ensure TARGET")
+		return fmt.Errorf("usage: lane ensure TARGET")
 	}
 	opts := lanectl.BridgeOptions("")
 	s := opts.Settings

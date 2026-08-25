@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// EnableAutostart registers pflane serve (or pathfinder-crt) at user login
+// EnableAutostart registers lane serve (or lane-crt) at user login
 // on macOS (launchd) or Linux (systemd --user). Other Unix is a no-op.
 func EnableAutostart(agentExe string) error {
 	agentExe, err := filepath.Abs(agentExe)

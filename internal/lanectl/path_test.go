@@ -9,8 +9,8 @@ import (
 )
 
 func TestPathHasDir(t *testing.T) {
-	dir := `C:\Users\me\AppData\Local\PathfinderCRT-Bridge\bin`
-	path := `C:\Windows\system32;C:\Users\me\AppData\Local\PathfinderCRT-Bridge\bin;C:\Go\bin`
+	dir := `C:\Users\me\AppData\Local\Lane\bin`
+	path := `C:\Windows\system32;C:\Users\me\AppData\Local\Lane\bin;C:\Go\bin`
 	if runtime.GOOS == "windows" {
 		if !pathHasDir(path, dir) {
 			t.Fatal("expected hit")
@@ -62,7 +62,7 @@ func TestParseSSHConfigProxyJump(t *testing.T) {
 }
 
 func TestRenderSSHConfigJump(t *testing.T) {
-	got := RenderSSHConfig("/opt/pflane", []SSHHost{{
+	got := RenderSSHConfig("/opt/lane", []SSHHost{{
 		Alias:    "acme-core",
 		Folder:   "Acme",
 		Host:     "10.1.1.1",

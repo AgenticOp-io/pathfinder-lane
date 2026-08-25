@@ -331,7 +331,7 @@ func applyAutostart(rep *Report, exe string) {
 		return
 	}
 	if exe == "" || !fileExists(exe) {
-		rep.Errors = append(rep.Errors, "autostart: agent binary not found — run pflane serve while using SecureCRT")
+		rep.Errors = append(rep.Errors, "autostart: agent binary not found — run lane serve while using SecureCRT")
 		return
 	}
 	if err := EnableAutostart(exe); err != nil {

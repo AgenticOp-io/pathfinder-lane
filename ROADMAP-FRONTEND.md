@@ -2,7 +2,7 @@
 
 **Status (AgenticOp track):** CRT P0 + MSP ops gaps largely **shipped** on `feature/crt-frontend-roadmap`  
 
-Work: https://github.com/AgenticOp-io/pathfinder-lane  
+Work: https://github.com/AgenticOp-io/lane  
 
 ---
 

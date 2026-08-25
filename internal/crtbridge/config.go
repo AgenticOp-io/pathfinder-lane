@@ -15,7 +15,7 @@ const (
 	AutoAuvik       = "auvik"       // Auvik for mapped CRT folders; no customer VPN
 )
 
-// Settings is the standalone companion config (~/.pathfinder-crt/settings.json).
+// Settings is the standalone companion config (~/.lane/settings.json).
 type Settings struct {
 	Mode         string            `json:"mode"`
 	CustomerRoot string            `json:"customer_root,omitempty"`

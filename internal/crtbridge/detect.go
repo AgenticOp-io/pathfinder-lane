@@ -47,6 +47,6 @@ func ProbeEnv(crtConfig, appHome string) Probe {
 		p.AgentPresent = true
 	}
 	p.CRTRunning = ProcessRunning("SecureCRT.exe")
-	p.AgentRunning = ProcessRunning("pathfinder-crt.exe")
+	p.AgentRunning = ProcessRunning("lane-crt.exe")
 	return p
 }

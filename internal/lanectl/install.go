@@ -16,7 +16,7 @@ func isGoRunCache(p string) bool {
 	return strings.Contains(s, "/go-build/")
 }
 
-// InstallSelf copies this pflane binary to the stable AppData/home bin
+// InstallSelf copies this lane binary to the stable AppData/home bin
 // so OpenSSH ProxyCommand and PuTTY local proxy keep working after a rebuild.
 func InstallSelf() (string, error) {
 	src, err := os.Executable()
@@ -28,14 +28,14 @@ func InstallSelf() (string, error) {
 		return src, err
 	}
 	if isGoRunCache(src) {
-		return src, fmt.Errorf("running from go run — build pflane and run that binary so ssh/PuTTY have a stable path")
+		return src, fmt.Errorf("running from go run — build lane and run that binary so ssh/PuTTY have a stable path")
 	}
 	dest := crtapp.LaneExe()
 	if err := copyExe(src, dest); err != nil {
 		return "", err
 	}
 	if st, err := os.Stat(appinstall.BinDir()); err == nil && st.IsDir() {
-		_ = copyExe(src, filepath.Join(appinstall.BinDir(), crtapp.ExeName("pflane")))
+		_ = copyExe(src, filepath.Join(appinstall.BinDir(), crtapp.ExeName("lane")))
 	}
 	_, _ = InstallOnPATH(dest)
 	return dest, nil

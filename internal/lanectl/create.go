@@ -68,7 +68,7 @@ func LaneBin() string {
 	if p := crtapp.LaneExe(); fileExists(p) {
 		return p
 	}
-	if p := filepath.Join(appinstall.BinDir(), crtapp.ExeName("pflane")); fileExists(p) {
+	if p := filepath.Join(appinstall.BinDir(), crtapp.ExeName("lane")); fileExists(p) {
 		return p
 	}
 	if exe, err := os.Executable(); err == nil {
@@ -76,7 +76,7 @@ func LaneBin() string {
 			return abs
 		}
 	}
-	return "pflane"
+	return "lane"
 }
 
 func BridgeOptions(appHome string) crtbridge.Options {
@@ -137,7 +137,7 @@ func Create(ctx context.Context, req CreateRequest) (CreateReport, error) {
 	rep.Mapped = len(mapped)
 	rep.Skipped = len(skipped)
 	if len(cfg.VPNTunnels) == 0 && len(cfg.AuvikTenants) == 0 {
-		rep.Notes = append(rep.Notes, "No folder maps yet. Run: pflane map-set FOLDER VPN-TARGET")
+		rep.Notes = append(rep.Notes, "No folder maps yet. Run: lane map-set FOLDER VPN-TARGET")
 	}
 
 	if req.SSH {
@@ -175,7 +175,7 @@ func Create(ctx context.Context, req CreateRequest) (CreateReport, error) {
 		} else if sshVia(req.Via) == "proxy" {
 			rep.Notes = append(rep.Notes, "OpenSSH: ssh <alias>  (ProxyCommand — no daemon)")
 		} else {
-			rep.Notes = append(rep.Notes, "OpenSSH aliases point at 127.0.0.1 — run: pflane serve")
+			rep.Notes = append(rep.Notes, "OpenSSH aliases point at 127.0.0.1 — run: lane serve")
 		}
 	}
 
@@ -199,7 +199,7 @@ func Create(ctx context.Context, req CreateRequest) (CreateReport, error) {
 			if err != nil {
 				rep.Notes = append(rep.Notes, "SecureCRT: "+err.Error())
 			} else {
-				rep.Notes = append(rep.Notes, fmt.Sprintf("SecureCRT: %d localhost proxy, %d standard SSH — needs: pflane serve (login autostart if those were rewritten)", crtRep.Tunnelled, crtRep.Direct))
+				rep.Notes = append(rep.Notes, fmt.Sprintf("SecureCRT: %d localhost proxy, %d standard SSH — needs: lane serve (login autostart if those were rewritten)", crtRep.Tunnelled, crtRep.Direct))
 			}
 		}
 	}
@@ -327,7 +327,7 @@ func rewritePutty(req CreateRequest, cfg crtbridge.Settings, mapped []Host, st *
 	} else if via == "proxy" {
 		notes = append(notes, fmt.Sprintf("PuTTY: %d sessions use local proxy (no daemon)", rewritten))
 	} else {
-		notes = append(notes, fmt.Sprintf("PuTTY: %d sessions → 127.0.0.1 — run: pflane serve", rewritten))
+		notes = append(notes, fmt.Sprintf("PuTTY: %d sessions → 127.0.0.1 — run: lane serve", rewritten))
 	}
 	return rewritten, skipped, notes, nil
 }

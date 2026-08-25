@@ -1,17 +1,17 @@
-# Security policy — PathfinderSSH MSP
+# Security policy — Lane
 
-This repository is the **AgenticOps MSP fork** of [PathfinderSSH](https://github.com/scottpeterman/pathfinderssh) (Scott Peterman), licensed under **GPL-3.0**. Upstream PathfinderSSH is not an AgenticOps product; this edition is.
+This repository is **Lane**, a last-mile GPL-3.0 derivative of [PathfinderSSH](https://github.com/scottpeterman/pathfinderssh) (Scott Peterman). Upstream PathfinderSSH is not an AgenticOps product. PathfinderSSH MSP is a separate AgenticOps product (`pathfinderssh-msp`).
 
 ## Reporting a vulnerability
 
 Please report security issues **privately first** — do not open a public GitHub issue for credential leaks, host-key bypasses, or anything that could put production gear at risk.
 
 - Email: **opensource@agenticop.io**
-- Subject line: `PathfinderSSH MSP security`
+- Subject line: `Lane security`
 
 Include what you observed, how to reproduce it, and which binary/commit you used (`pathfinder.exe -version` / `git describe` if building from source). We will acknowledge receipt and work with you on a fix before any public disclosure.
 
-For non-security bugs, use the normal issue tracker on https://github.com/AgenticOp-io/pathfinder-lane.
+For non-security bugs, use the normal issue tracker on https://github.com/AgenticOp-io/lane.
 
 ## Security stance (non-negotiable)
 
@@ -26,7 +26,7 @@ These match upstream PathfinderSSH’s documented perimeter. Automated crawl/cap
 
 ## GPL and attribution
 
-Distributed binaries must remain free software under GPL-3.0. Corresponding source is this MSP repository. Installed AppData copies include `LICENSE` and `NOTICE` beside `pathfinder.exe`. See `NOTICE` for upstream attribution.
+Distributed binaries must remain free software under GPL-3.0. Corresponding source is this Lane repository. Installed AppData copies include `LICENSE` and `NOTICE`. See `NOTICE` for upstream attribution.
 
 ## Out of scope for this policy
 

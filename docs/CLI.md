@@ -1,6 +1,19 @@
 # Command-line reference
 
-## pfinstall (primary installer)
+## lane (last-mile CLI)
+
+Setup once, then keep using OpenSSH, PuTTY, or SecureCRT. See [LANE.md](LANE.md).
+
+```
+lane setup
+lane map-set Acme wireguard:acme
+lane create-all
+lane serve
+```
+
+Windows CRT wizard: `lane-install.exe`. Agent: `lane-crt.exe`.
+
+## pfinstall (Pathfinder GUI installer, inherited)
 
 | Flag | Purpose |
 | --- | --- |
@@ -44,13 +57,13 @@ Environment:
 
 | Command | Purpose |
 | --- | --- |
-| `pflane` | Cross-platform last-mile CLI: map folders, `create-all` for OpenSSH / SecureCRT / PuTTY |
+| `lane` | Cross-platform last-mile CLI: map folders, `create-all` for OpenSSH / SecureCRT / PuTTY |
 | `pfseed` | Headless seeds, Auvik sync (`pfseed sync-auvik`) |
 | `crawl` | BFS network discovery |
 | `capture` | Config capture runner |
 | `mapview` | Local map HTTP viewer |
 | `pfvault` | Vault CLI utilities |
 
-`pflane` is the engineer-facing CLI for existing SSH clients. See [PFLANE.md](PFLANE.md).
+`lane` is the engineer-facing CLI for existing SSH clients. See [LANE.md](LANE.md).
 
 Run from repo root after `go build ./cmd/<name>` or from the installed AppData `bin` folder.

@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	pathMarker = "# pathfinder-lane"
-	pathExport = `export PATH="$HOME/.local/bin:$PATH"`
+	pathMarker       = "# agenticop-lane"
+	pathMarkerLegacy = "# pathfinder-lane"
+	pathExport       = `export PATH="$HOME/.local/bin:$PATH"`
 )
 
 // UserLocalBin is ~/.local/bin (XDG user executables).
@@ -22,8 +23,8 @@ func UserLocalBin() string {
 	return filepath.Join(home, ".local", "bin")
 }
 
-// InstallOnPATH puts pflane on the user PATH: Windows user Path (the bin
-// directory), Unix ~/.local/bin/pflane plus a shell snippet when needed.
+// InstallOnPATH puts lane on the user PATH: Windows user Path (the bin
+// directory), Unix ~/.local/bin/lane plus a shell snippet when needed.
 func InstallOnPATH(exe string) (string, error) {
 	exe = strings.TrimSpace(exe)
 	if exe == "" {
@@ -42,15 +43,18 @@ func InstallOnPATH(exe string) (string, error) {
 	return installOnPATH(abs)
 }
 
-// PATHStatus is LookPath("pflane") when the current process can find it.
+// PATHStatus is LookPath("lane") when the current process can find it.
 func PATHStatus() string {
-	if p, err := lookPathPflane(); err == nil && p != "" {
+	if p, err := lookPathLane(); err == nil && p != "" {
 		return p
 	}
 	return ""
 }
 
-func lookPathPflane() (string, error) {
+func lookPathLane() (string, error) {
+	if p, err := osLookPath(crtapp.ExeName("lane")); err == nil {
+		return p, nil
+	}
 	return osLookPath(crtapp.ExeName("pflane"))
 }
 
@@ -85,7 +89,7 @@ func pathSnippet() string {
 func ensurePathSnippet(rcPath string) error {
 	raw, _ := os.ReadFile(rcPath)
 	text := string(raw)
-	if strings.Contains(text, pathMarker) || strings.Contains(text, `/.local/bin`) {
+	if strings.Contains(text, pathMarker) || strings.Contains(text, pathMarkerLegacy) || strings.Contains(text, `/.local/bin`) {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(rcPath), 0o755); err != nil {

@@ -43,8 +43,8 @@ func TestParseSSHConfigHosts(t *testing.T) {
 
 func TestPatchPuttyText(t *testing.T) {
 	raw := "HostName=10.1.1.1\nPortNumber=22\nProtocol=ssh\n"
-	got := patchPuttyText(raw, "10.1.1.1", 22, 5, `pflane proxy -folder Acme -host %host -port %port`)
-	if !strings.Contains(got, "ProxyMethod=5") || !strings.Contains(got, "pflane proxy") {
+	got := patchPuttyText(raw, "10.1.1.1", 22, 5, `lane proxy -folder Acme -host %host -port %port`)
+	if !strings.Contains(got, "ProxyMethod=5") || !strings.Contains(got, "lane proxy") {
 		t.Fatal(got)
 	}
 	if !strings.Contains(got, "HostName=10.1.1.1") {
@@ -53,8 +53,8 @@ func TestPatchPuttyText(t *testing.T) {
 }
 
 func TestLaneProxyCommand(t *testing.T) {
-	got := LaneProxyCommand(`/opt/pflane`, "Acme", "%h", "%p")
-	if !strings.Contains(got, "/opt/pflane proxy -folder Acme -host %h -port %p") {
+	got := LaneProxyCommand(`/opt/lane`, "Acme", "%h", "%p")
+	if !strings.Contains(got, "/opt/lane proxy -folder Acme -host %h -port %p") {
 		t.Fatal(got)
 	}
 }

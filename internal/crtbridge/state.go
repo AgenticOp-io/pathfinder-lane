@@ -21,7 +21,7 @@ const (
 	modeAuvik     = "auvik" // legacy state from the first CRT rewrite
 )
 
-// State is persisted under ~/.pathfinder-crt/crt-bridge.json.
+// State is persisted under ~/.lane/crt-bridge.json.
 type State struct {
 	InstalledAt    string             `json:"installed_at,omitempty"`
 	BackupDir      string             `json:"backup_dir,omitempty"`
@@ -205,7 +205,7 @@ func frontListenPort(rel string) int {
 func DefaultAgentExe() string {
 	candidates := []string{crtapp.AgentExe()}
 	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(exe), crtapp.ExeName("pathfinder-crt")), exe)
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), crtapp.ExeName("lane-crt")), exe)
 	}
 	for _, p := range candidates {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {

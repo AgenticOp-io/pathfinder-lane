@@ -21,7 +21,7 @@ func installOnPATH(exe string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	dest := filepath.Join(dir, "pflane")
+	dest := filepath.Join(dir, "lane")
 	if same, _ := samePath(exe, dest); same {
 		_ = ensureUnixPathRC()
 		return dest, nil

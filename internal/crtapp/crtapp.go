@@ -8,13 +8,13 @@ import (
 )
 
 const (
-	Name         = "Pathfinder CRT Bridge"
-	InstallDir   = "PathfinderCRT-Bridge"
-	ShortcutBase = "Pathfinder CRT Bridge"
-	HomeDirName  = ".pathfinder-crt"
+	Name         = "Lane"
+	InstallDir   = "Lane"
+	ShortcutBase = "Lane"
+	HomeDirName  = ".lane"
 )
 
-// Root is %LOCALAPPDATA%\PathfinderCRT-Bridge on Windows.
+// Root is %LOCALAPPDATA%\Lane on Windows.
 func Root() string {
 	if runtime.GOOS == "windows" {
 		if base := os.Getenv("LOCALAPPDATA"); base != "" {
@@ -25,7 +25,7 @@ func Root() string {
 	if err != nil {
 		return InstallDir
 	}
-	return filepath.Join(home, ".pathfinder-crt-app")
+	return filepath.Join(home, ".lane-app")
 }
 
 func BinDir() string { return filepath.Join(Root(), "bin") }
@@ -37,13 +37,13 @@ func ExeName(base string) string {
 	return base
 }
 
-func AgentExe() string { return filepath.Join(BinDir(), ExeName("pathfinder-crt")) }
+func AgentExe() string { return filepath.Join(BinDir(), ExeName("lane-crt")) }
 
-func LaneExe() string { return filepath.Join(BinDir(), ExeName("pflane")) }
+func LaneExe() string { return filepath.Join(BinDir(), ExeName("lane")) }
 
-func InstallerExe() string { return filepath.Join(BinDir(), ExeName("pfcrt-install")) }
+func InstallerExe() string { return filepath.Join(BinDir(), ExeName("lane-install")) }
 
-// Home is ~/.pathfinder-crt (config, backups, logs). Independent of Pathfinder.
+// Home is ~/.lane (config, backups, logs). Independent of Pathfinder.
 func Home() string {
 	h, err := os.UserHomeDir()
 	if err != nil {

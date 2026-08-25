@@ -1,9 +1,9 @@
-// pathfinder-crt is the standalone SecureCRT companion (not Pathfinder).
+// lane-crt is the standalone SecureCRT companion (not Pathfinder).
 //
-//	pathfinder-crt -install   backup CRT customer folder, apply templates, start agent
-//	pathfinder-crt -uninstall restore original SSH host/port, remove autostart
-//	pathfinder-crt -sync      re-check customers and update CRT sessions once
-//	pathfinder-crt            run the background agent (default after install)
+//	lane-crt -install   backup CRT customer folder, apply templates, start agent
+//	lane-crt -uninstall restore original SSH host/port, remove autostart
+//	lane-crt -sync      re-check customers and update CRT sessions once
+//	lane-crt            run the background agent (default after install)
 package main
 
 import (
@@ -89,7 +89,7 @@ func main() {
 	hideConsole()
 	runCtx, stop := context.WithCancel(context.Background())
 	defer stop()
-	log.Printf("pathfinder-crt %s agent starting (mode %s)", version, opts.Settings.Mode)
+	log.Printf("lane-crt %s agent starting (mode %s)", version, opts.Settings.Mode)
 	if err := crtbridge.RunAgent(runCtx, opts); err != nil && err != context.Canceled {
 		log.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func agentExe() string {
 	if exe, err := os.Executable(); err == nil {
 		return exe
 	}
-	return crtapp.ExeName("pathfinder-crt")
+	return crtapp.ExeName("lane-crt")
 }
 
 func fileExists(p string) bool {

@@ -185,7 +185,7 @@ func rememberPuttyOrig(store map[string]puttyOrig, e puttyEntry) {
 	if e.Host == "127.0.0.1" || e.Host == "::1" {
 		return
 	}
-	if e.ProxyMethod == puttyProxyMethodLocal() && strings.Contains(e.ProxyCmd, "pflane") {
+	if e.ProxyMethod == puttyProxyMethodLocal() && strings.Contains(e.ProxyCmd, "lane") {
 		return
 	}
 	store[e.Name] = puttyOrig{

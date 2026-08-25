@@ -45,7 +45,7 @@ func RemoveShortcuts() {
 
 func writeShortcut(lnk, target, workdir string) error {
 	ps := fmt.Sprintf(
-		`$s = (New-Object -ComObject WScript.Shell).CreateShortcut(%s); $s.TargetPath = %s; $s.WorkingDirectory = %s; $s.WindowStyle = 1; $s.Description = 'Pathfinder CRT Bridge installer'; $s.Save()`,
+		`$s = (New-Object -ComObject WScript.Shell).CreateShortcut(%s); $s.TargetPath = %s; $s.WorkingDirectory = %s; $s.WindowStyle = 1; $s.Description = 'Lane installer'; $s.Save()`,
 		psQuote(lnk), psQuote(target), psQuote(workdir),
 	)
 	cmd := winexec.Command("powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", ps)

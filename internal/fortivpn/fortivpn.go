@@ -45,6 +45,7 @@ func DefaultTools() string {
 	local := os.Getenv("LOCALAPPDATA")
 	name := "FortiSSLVPNclient.exe"
 	cands := []string{
+		filepath.Join(local, "Lane", "bin", name),
 		filepath.Join(local, "PathfinderCRT-Bridge", "bin", name),
 		filepath.Join(home, "FortiClientTools", "SSLVPNcmdline", "x64", name),
 		filepath.Join(home, "Downloads", "SSLVPNcmdline", "x64", name),

@@ -2186,7 +2186,7 @@ func (h *host) askCursorAgent(prompt string) (string, error) {
 	}
 	repo := strings.TrimSpace(h.base.CursorRepo)
 	if repo == "" {
-		repo = "https://github.com/AgenticOp-io/pathfinder-lane"
+		repo = "https://github.com/AgenticOp-io/lane"
 	}
 	ref := strings.TrimSpace(h.base.CursorRepoRef)
 	if ref == "" {
@@ -4633,7 +4633,7 @@ func (h *host) hostPaths() []ui.AboutDetail {
 	return []ui.AboutDetail{
 		{Label: "License", Value: "GNU GPL v3.0 — free software; you may redistribute under the same terms"},
 		{Label: "Based on", Value: "PathfinderSSH by Scott Peterman (https://github.com/scottpeterman/pathfinderssh)"},
-		{Label: "Source", Value: "https://github.com/AgenticOp-io/pathfinder-lane"},
+		{Label: "Source", Value: "https://github.com/AgenticOp-io/lane"},
 		{Label: "Vault", Value: vaultPath},
 		{Label: "Sessions", Value: h.sessionsPath},
 		{Label: "Captures", Value: h.lastCapture.Params.StorePath},

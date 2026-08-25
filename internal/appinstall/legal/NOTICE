@@ -1,5 +1,5 @@
-PathfinderSSH MSP
-=================
+Lane
+====
 
 This program is a modified version of PathfinderSSH.
 
@@ -7,11 +7,14 @@ This program is a modified version of PathfinderSSH.
   Upstream project: https://github.com/scottpeterman/pathfinderssh
   Upstream license: GNU General Public License v3.0 (GPL-3.0)
 
-  MSP edition: AgenticOp-io / AgenticOps
-  Product source: https://github.com/AgenticOp-io/pathfinder-lane
+  Product: Lane — AgenticOp-io / AgenticOps
+  Product source: https://github.com/AgenticOp-io/lane
+
+  PathfinderSSH MSP (separate product):
+  https://github.com/AgenticOp-io/pathfinderssh-msp
 
 The complete corresponding source for any binary we distribute is available
-from the MSP repository above under the same GPL-3.0 terms. See the file
+from the product repository above under the same GPL-3.0 terms. See the file
 LICENSE in this tree for the full license text.
 
 Copyright notices from upstream and from subsequent contributors remain in

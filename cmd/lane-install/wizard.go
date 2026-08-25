@@ -28,7 +28,7 @@ type vpnPick struct {
 }
 
 func runGUI() {
-	a := app.NewWithID("com.pathfinder.pfcrt-install")
+	a := app.NewWithID("io.agenticop.lane-install")
 	ui.LoadUserThemes()
 	ui.ApplyInstallerTheme(a)
 	if icon := ui.AppIcon(); icon != nil {
@@ -39,15 +39,15 @@ func runGUI() {
 	probe := crtbridge.ProbeEnv(s.CRTConfig, crtapp.Home())
 	updating := probe.Installed || probe.AgentPresent
 
-	title := "Install Pathfinder CRT Bridge"
+	title := "Install Lane"
 	if updating {
-		title = "Update Pathfinder CRT Bridge"
+		title = "Update Lane"
 	}
 	w := a.NewWindow(title)
 	w.Resize(fyne.NewSize(860, 940))
 	w.CenterOnScreen()
 
-	heroTitle := "Pathfinder CRT Bridge"
+	heroTitle := "Lane"
 	heroSub := "Map what this PC already has (CRT folders, FortiClient tunnels, Auvik tenants) to what each customer needs. After that, opening a session is automatic."
 	if updating {
 		heroSub = "Refresh the maps and rewrite SecureCRT sessions. Runtime never guesses names."
@@ -426,7 +426,7 @@ func runGUI() {
 
 	uninstallBtn.OnTapped = func() {
 		dialog.ShowConfirm("Uninstall",
-			"Restore original SecureCRT SSH hosts and remove Pathfinder CRT Bridge from AppData?\nBackups under ~/.pathfinder-crt are kept.",
+			"Restore original SecureCRT SSH hosts and remove Lane from AppData?\nBackups under ~/.lane are kept.",
 			func(ok bool) {
 				if !ok {
 					return
