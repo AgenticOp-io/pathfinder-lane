@@ -3,6 +3,7 @@ package lanectl
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -16,10 +17,40 @@ import (
 // any other client) dials. Auvik tunnels stay Pathfinder's own path.
 // VPN failure is returned for logging; the caller should still connect.
 func PrepareConnect(ctx context.Context, folder, name, host string) error {
-	cfg, err := crtbridge.LoadSettings(crtapp.Home())
-	if err != nil {
+	vpn, cfg := VPNTarget(folder, name, host)
+	if vpn == "" {
 		return nil
 	}
+	return vpnprov.Ensure(ctx, vpnprov.Bins{
+		FortiBin:   cfg.VPNBin,
+		FortiTools: cfg.VPNTools,
+		WireGuard:  cfg.WGBin,
+		Zscaler:    cfg.ZSABin,
+	}, vpn)
+}
+
+// VPNTarget is the mapped customer VPN for this Pathfinder (or CRT) session.
+// Empty means no VPN — the session stays on the default route.
+func VPNTarget(folder, name, host string) (string, crtbridge.Settings) {
+	cfg, err := crtbridge.LoadSettings(crtapp.Home())
+	if err != nil {
+		return "", crtbridge.Settings{}
+	}
+	return vpnForSession(cfg, folder, name, host), cfg
+}
+
+// DialerFor returns a TCP dialer bound to the customer VPN adapter when we
+// can name it. Fail-open: unmapped sessions and unmatched adapters use the
+// default route (a plain Dialer).
+func DialerFor(folder, name, host string) *net.Dialer {
+	vpn, _ := VPNTarget(folder, name, host)
+	if vpn == "" {
+		return &net.Dialer{}
+	}
+	return vpnprov.Dialer(vpn)
+}
+
+func vpnForSession(cfg crtbridge.Settings, folder, name, host string) string {
 	customer := strings.TrimSpace(sessions.CustomerOfFolder(folder))
 	if customer == "" {
 		customer = cfg.HostFolder(name, host)
@@ -31,16 +62,7 @@ func PrepareConnect(ctx context.Context, folder, name, host string) error {
 	if folder != "" && name != "" {
 		rel = strings.ReplaceAll(folder, `\`, `/`) + "/" + name + ".ini"
 	}
-	vpn := cfg.VPNTunnelForSession(rel, customer)
-	if vpn == "" {
-		return nil
-	}
-	return vpnprov.Ensure(ctx, vpnprov.Bins{
-		FortiBin:   cfg.VPNBin,
-		FortiTools: cfg.VPNTools,
-		WireGuard:  cfg.WGBin,
-		Zscaler:    cfg.ZSABin,
-	}, vpn)
+	return cfg.VPNTunnelForSession(rel, customer)
 }
 
 func BindHost(appHome, key, folder string) error {

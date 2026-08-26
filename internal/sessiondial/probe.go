@@ -17,6 +17,11 @@ const DefaultReachTimeout = 5 * time.Second
 // ProbeTCP checks that host:port accepts a TCP connection within timeout.
 // It does not speak SSH/telnet — only that the IP/port is reachable.
 func ProbeTCP(host string, port int, timeout time.Duration) error {
+	return ProbeTCPDial(nil, host, port, timeout)
+}
+
+// ProbeTCPDial is ProbeTCP using d for the TCP hop. nil d is the default route.
+func ProbeTCPDial(d *net.Dialer, host string, port int, timeout time.Duration) error {
 	host = strings.TrimSpace(host)
 	if host == "" {
 		return fmt.Errorf("no host to reach")
@@ -28,8 +33,15 @@ func ProbeTCP(host string, port int, timeout time.Duration) error {
 		timeout = DefaultReachTimeout
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	d := net.Dialer{Timeout: timeout}
-	conn, err := d.Dial("tcp", addr)
+	dialer := &net.Dialer{Timeout: timeout}
+	if d != nil && host != "127.0.0.1" && host != "::1" && host != "localhost" {
+		cp := *d
+		if cp.Timeout == 0 {
+			cp.Timeout = timeout
+		}
+		dialer = &cp
+	}
+	conn, err := dialer.Dial("tcp", addr)
 	if err != nil {
 		return Humanize(fmt.Errorf("%s is not reachable: %w", addr, err))
 	}
@@ -40,6 +52,11 @@ func ProbeTCP(host string, port int, timeout time.Duration) error {
 // ProbeNode checks the first TCP hop for an SSH or telnet session (the jump
 // host when configured, otherwise the target). Serial sessions are skipped.
 func ProbeNode(n sessions.Node, resolve func(string) string, timeout time.Duration) error {
+	return ProbeNodeDial(nil, n, resolve, timeout)
+}
+
+// ProbeNodeDial is ProbeNode using d for the first TCP hop.
+func ProbeNodeDial(d *net.Dialer, n sessions.Node, resolve func(string) string, timeout time.Duration) error {
 	n = n.Normalize()
 	switch n.Transport {
 	case sessions.TransportSerial:
@@ -65,7 +82,7 @@ func ProbeNode(n sessions.Node, resolve func(string) string, timeout time.Durati
 		if port == 0 {
 			port = 22
 		}
-		return ProbeTCP(resolve(n.Jump.Host), port, timeout)
+		return ProbeTCPDial(d, resolve(n.Jump.Host), port, timeout)
 	}
 	port := n.Port
 	if port == 0 {
@@ -75,5 +92,5 @@ func ProbeNode(n sessions.Node, resolve func(string) string, timeout time.Durati
 			port = 22
 		}
 	}
-	return ProbeTCP(resolve(n.Host), port, timeout)
+	return ProbeTCPDial(d, resolve(n.Host), port, timeout)
 }

@@ -97,8 +97,8 @@ func Dial(cfg Config) (*Client, error) {
 	}
 
 	var (
-		conn       net.Conn
-		bastions   []*ssh.Client
+		conn     net.Conn
+		bastions []*ssh.Client
 	)
 
 	chain := jumpChain(c)
@@ -127,7 +127,7 @@ func Dial(cfg Config) (*Client, error) {
 			return nil, fmt.Errorf("reach %s through jump chain: %w", addr, err)
 		}
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, c.Timeout)
+		conn, err = c.dialTCP(addr)
 		if err != nil {
 			return nil, fmt.Errorf("connect to %s: %w", addr, err)
 		}
@@ -208,7 +208,12 @@ func dialJump(c *Config, hostKeyCB ssh.HostKeyCallback) (*ssh.Client, error) {
 		return nil, fmt.Errorf("jump host %s: no usable credentials (set a key or password)", addr)
 	}
 
-	jumpClient, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+	conn, err := c.dialTCP(addr)
+	if err != nil {
+		return nil, fmt.Errorf("connect to jump host %s: %w", addr, err)
+	}
+	conn.SetDeadline(time.Now().Add(c.Timeout))
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
 		User:              j.Username,
 		Auth:              methods,
 		HostKeyCallback:   hostKeyCB,
@@ -217,9 +222,27 @@ func dialJump(c *Config, hostKeyCB ssh.HostKeyCallback) (*ssh.Client, error) {
 		HostKeyAlgorithms: hostKeyAlgos(c.LegacyAlgorithms),
 	})
 	if err != nil {
+		conn.Close()
 		return nil, fmt.Errorf("connect to jump host %s: %w", addr, err)
 	}
-	return jumpClient, nil
+	conn.SetDeadline(time.Time{})
+	return ssh.NewClient(sshConn, chans, reqs), nil
+}
+
+func (c Config) dialTCP(addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil && (host == "127.0.0.1" || host == "::1" || host == "localhost") {
+		return net.DialTimeout("tcp", addr, c.Timeout)
+	}
+	d := c.Dialer
+	if d == nil {
+		return net.DialTimeout("tcp", addr, c.Timeout)
+	}
+	cp := *d
+	if cp.Timeout == 0 {
+		cp.Timeout = c.Timeout
+	}
+	return cp.Dial("tcp", addr)
 }
 
 func readKeyFile(path string) ([]byte, error) {

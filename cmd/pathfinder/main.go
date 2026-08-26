@@ -97,6 +97,7 @@ import (
 	"github.com/scottpeterman/pathfinderssh/internal/ui"
 	"github.com/scottpeterman/pathfinderssh/internal/vault"
 	"github.com/scottpeterman/pathfinderssh/internal/vaultcli"
+	"github.com/scottpeterman/pathfinderssh/internal/vpnprov"
 	"github.com/scottpeterman/pathfinderssh/internal/workcontext"
 )
 
@@ -3030,6 +3031,25 @@ func ensureLaneVPN(ctx context.Context, folder string, n sessions.Node) {
 	}
 }
 
+// laneDialer binds Pathfinder's first TCP hop to the customer VPN adapter
+// when we can name it (same as lane proxy). Unmapped / unmatched = default route.
+func laneDialer(folder string, n sessions.Node) *net.Dialer {
+	if !n.Transport.IsNetwork() {
+		return nil
+	}
+	vpn, _ := lanectl.VPNTarget(folder, n.Name, n.Host)
+	if vpn == "" {
+		return nil
+	}
+	d := vpnprov.Dialer(vpn)
+	if info, ok := vpnprov.LookupIface(vpn); ok {
+		log.Printf("[lane] dial via %s (%s) for %s", info.Name, info.IPv4, vpn)
+	} else {
+		log.Printf("[lane] vpn %s — adapter unnamed, default route", vpn)
+	}
+	return d
+}
+
 func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(sessions.Node)) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -3062,7 +3082,8 @@ func (h *host) connect(folder, oldLabel string, n sessions.Node, persist func(se
 		PromptLogin: func() (string, string, error) {
 			return h.promptLogin(folder, oldLabel, &node)
 		},
-		Log: log.Printf,
+		Log:    log.Printf,
+		Dialer: laneDialer(folder, node),
 	}
 
 	go func() {
@@ -3243,7 +3264,8 @@ func (h *host) reconnectTerminal(sess *ui.Session, inst *ui.Instance, folder str
 		PromptLogin: func() (string, string, error) {
 			return h.promptLogin(folder, n.Label(), &node)
 		},
-		Log: log.Printf,
+		Log:    log.Printf,
+		Dialer: laneDialer(folder, node),
 	}
 
 	go func() {

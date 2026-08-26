@@ -1,0 +1,23 @@
+name: lane
+
+on:
+  push:
+    branches: [main, candidate/**]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Last-mile packages
+        run: go test ./internal/lanectl ./internal/vpnprov ./internal/crtbridge ./internal/sessiondial ./internal/sshcore
+      - name: Build lane CLI
+        run: go build -o lane${{ matrix.os == 'windows-latest' && '.exe' || '' }} ./cmd/lane

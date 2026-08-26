@@ -95,6 +95,10 @@ type Config struct {
 	// same way the SSH path does.
 	TermType string
 
+	// Dialer, when set, binds the TCP dial to a customer VPN adapter.
+	// Loopback ignores it. nil uses the default route.
+	Dialer *net.Dialer
+
 	crlfSet bool // internal: distinguishes "CRLF=false on purpose" from zero value
 }
 
@@ -125,6 +129,19 @@ func (c Config) withDefaults() Config {
 func (c Config) addr() string {
 	c = c.withDefaults()
 	return net.JoinHostPort(c.Host, fmt.Sprintf("%d", c.Port))
+}
+
+func (b *Backend) dialTCP() (net.Conn, error) {
+	addr := b.cfg.addr()
+	host := b.cfg.Host
+	if host == "127.0.0.1" || host == "::1" || host == "localhost" || b.cfg.Dialer == nil {
+		return net.DialTimeout("tcp", addr, b.cfg.ConnectTimeout)
+	}
+	d := *b.cfg.Dialer
+	if d.Timeout == 0 {
+		d.Timeout = b.cfg.ConnectTimeout
+	}
+	return d.Dial("tcp", addr)
 }
 
 // Summary is a short human-readable form, e.g. "10.0.0.1:23".
@@ -208,7 +225,7 @@ func (b *Backend) Connect() error {
 	}
 	b.mu.Unlock()
 
-	conn, err := net.DialTimeout("tcp", b.cfg.addr(), b.cfg.ConnectTimeout)
+	conn, err := b.dialTCP()
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", b.cfg.addr(), err)
 	}

@@ -20,6 +20,23 @@ func TestHostBindMapsSession(t *testing.T) {
 	}
 }
 
+func TestVPNForSession(t *testing.T) {
+	cfg := crtbridge.Settings{
+		Mode:       crtbridge.AutoFortiClient,
+		VPNTunnels: map[string]string{"Acme": "wireguard:acme"},
+		HostBinds:  map[string]string{"fw-01": "Acme"},
+	}
+	if got := vpnForSession(cfg, "Customers/Acme", "core", "10.1.1.1"); got != "wireguard:acme" {
+		t.Fatalf("folder cover: %q", got)
+	}
+	if got := vpnForSession(cfg, "", "fw-01", "10.1.1.1"); got != "wireguard:acme" {
+		t.Fatalf("host bind: %q", got)
+	}
+	if got := vpnForSession(cfg, "Unassigned", "other", "10.2.2.2"); got != "" {
+		t.Fatalf("unmapped must stay empty, got %q", got)
+	}
+}
+
 func TestMapped(t *testing.T) {
 	cfg := crtbridge.Settings{
 		Mode:       crtbridge.AutoFortiClient,

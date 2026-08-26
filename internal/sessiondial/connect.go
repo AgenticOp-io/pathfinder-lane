@@ -111,6 +111,10 @@ type Options struct {
 	// HostKeyAlias pins known_hosts under a stable name while dialing a
 	// different address (e.g. Auvik local tunnel → real device IP:port).
 	HostKeyAlias string
+
+	// Dialer binds the first TCP hop to a customer VPN adapter when set.
+	// Loopback (Auvik local port) ignores it. nil uses the default route.
+	Dialer *net.Dialer
 }
 
 func (o Options) logf(format string, args ...any) {
@@ -208,7 +212,7 @@ func dial(ctx context.Context, n sessions.Node, o Options) (term.Transport, erro
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if err := ProbeNode(n, o.resolve, o.ReachTimeout); err != nil {
+		if err := ProbeNodeDial(o.Dialer, n, o.resolve, o.ReachTimeout); err != nil {
 			return nil, err
 		}
 		o.logf("[reach] %s is accepting TCP", n.Target())
@@ -257,6 +261,7 @@ func connectTelnet(n sessions.Node, o Options) (term.Transport, error) {
 		Host:     host,
 		Port:     n.Port,
 		TermType: n.TermType,
+		Dialer:   o.Dialer,
 	}
 	// WithCRLF rather than the field directly, so a deliberate false is not
 	// reset to the default on the way in.
@@ -284,6 +289,7 @@ func connectSSH(ctx context.Context, n sessions.Node, o Options) (term.Transport
 		KnownHostsPath:   n.KnownHostsPath,
 		AuthPrompt:       o.AuthPrompt,
 		HostKeyAlias:     strings.TrimSpace(o.HostKeyAlias),
+		Dialer:           o.Dialer,
 	}
 
 	policy, prompt := hostKeyPolicy(n.HostKeyPolicy, o)

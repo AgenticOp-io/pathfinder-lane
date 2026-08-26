@@ -85,6 +85,10 @@ type Config struct {
 	// (group1-sha1, CBC modes, hmac-sha1/md5, ssh-rsa/ssh-dss) after the
 	// modern set. Required for old routers/switches; off by default.
 	LegacyAlgorithms bool
+
+	// Dialer, when set, is used for the first TCP hop (direct target or the
+	// nearest bastion). nil uses the default route. Loopback dials ignore it.
+	Dialer *net.Dialer
 }
 
 func (c *Config) withDefaults() Config {

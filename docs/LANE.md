@@ -50,7 +50,7 @@ SecureCRT login autostart (`lane serve`, or `lane-crt` when that binary is prese
 
 Mapped OpenSSH hosts that already have a Pathfinder jump hop (or `ProxyJump` in `~/.ssh/config` / `hosts.json`) get a generated jump `Host` plus `ProxyJump` — VPN Ensure runs on the bastion hop. Pathfinder Connect already Ensures, then uses `JumpSpec`.
 
-The splice prefers the customer VPN adapter when we can name it (WireGuard iface, Forti SSL adapter, Zscaler). Unmatched adapters fail-open to the default route. Overlapping office `10.x` vs customer `10.x` still needs that bind to succeed.
+The splice prefers the customer VPN adapter when we can name it (WireGuard iface, Forti SSL adapter, Zscaler). Pathfinder Connect uses the same bind for its first TCP hop (direct or nearest bastion). Unmatched adapters fail-open to the default route. Overlapping office `10.x` vs customer `10.x` still needs that bind to succeed.
 
 ## Commands
 
